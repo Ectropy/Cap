@@ -1914,6 +1914,22 @@ pub struct AudioTrackSegment {
     /// without re-decoding the file.
     #[serde(default)]
     pub duration: Option<f64>,
+    #[serde(default)]
+    pub replaces_mic: bool,
+    #[serde(default)]
+    pub voice: Option<TakeVoiceSettings>,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase", tag = "mode")]
+pub enum TakeVoiceSettings {
+    MatchRecording,
+    #[serde(rename_all = "camelCase")]
+    Custom {
+        improve: bool,
+        isolation: VoiceIsolation,
+        stereo_mode: StereoMode,
+    },
 }
 
 impl AudioTrackSegment {

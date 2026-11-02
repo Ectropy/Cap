@@ -248,8 +248,17 @@ pub enum PlaybackEvent {
     Stop,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct PlaybackClockAnchor {
+    pub instant: Instant,
+    pub timeline_secs: f64,
+}
+
+pub type PlaybackClock = Arc<std::sync::Mutex<Option<PlaybackClockAnchor>>>;
+
 #[derive(Clone)]
 pub struct PlaybackHandle {
+    clock: PlaybackClock,
     preparing_audio_released: Arc<AtomicBool>,
     stop_tx: watch::Sender<bool>,
     event_rx: watch::Receiver<PlaybackEvent>,
@@ -720,7 +729,9 @@ impl Playback {
 
         let preparing_audio_released = Arc::new(AtomicBool::new(false));
         let runtime = tokio::runtime::Handle::current();
+        let playback_clock = PlaybackClock::default();
         let handle = PlaybackHandle {
+            clock: playback_clock.clone(),
             preparing_audio_released: preparing_audio_released.clone(),
             stop_tx: stop_tx.clone(),
             event_rx,
@@ -1462,8 +1473,18 @@ impl Playback {
             ));
             diagnostic.field(Field::flag("audio_output_started", has_audio));
             diagnostic.stage("playing");
+            let publish_clock = |instant: Instant, frame: u32| {
+                *playback_clock
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                    Some(PlaybackClockAnchor {
+                        instant,
+                        timeline_secs: frame as f64 / fps_f64,
+                    });
+            };
             let mut start = Instant::now();
             let mut clock_anchor_frame = playback_start_frame;
+            publish_clock(start, clock_anchor_frame);
 
             let mut transitioned_audio = None;
             let mut last_adopted_frame = None;
@@ -1520,6 +1541,7 @@ impl Playback {
                     has_audio = true;
                     clock_anchor_frame = frame_number;
                     start = Instant::now();
+                    publish_clock(start, clock_anchor_frame);
                 }
                 if let Some(adoption) = adopted {
                     let Some(snapshot) = adoption.snapshot() else {
@@ -1552,6 +1574,7 @@ impl Playback {
                     frame_number = target;
                     clock_anchor_frame = target;
                     start = Instant::now();
+                    publish_clock(start, clock_anchor_frame);
                     prefetch_buffer.clear();
                     frame_cache.evict_far_from(target, limit_now as u32);
                     let _ = frame_request_tx.send((seek_generation, target));
@@ -2191,6 +2214,10 @@ impl Drop for AdoptedPlaybackGuard {
 }
 
 impl PlaybackHandle {
+    pub fn clock(&self) -> PlaybackClock {
+        self.clock.clone()
+    }
+
     pub(crate) fn preparing_audio_released(&self) -> bool {
         self.preparing_audio_released.load(Ordering::Acquire)
     }
@@ -2407,6 +2434,7 @@ mod tests {
             let (seek_tx, _) = watch::channel((0, 0));
             (
                 PlaybackHandle {
+                    clock: PlaybackClock::default(),
                     preparing_audio_released: Arc::new(AtomicBool::new(false)),
                     adopted: None,
                     stop_tx,

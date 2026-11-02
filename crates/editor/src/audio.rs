@@ -8,8 +8,8 @@ use cap_media::MediaError;
 use cap_media_info::AudioInfo;
 use cap_project::{
     AudioConfiguration, ClipOffsets, ClipSpeedAudioMode, ClipTransitionType, ProjectConfiguration,
-    TimelineConfiguration, TimelineFrameMapping, TimelineSegment, TimelineSource, VoiceDeclick,
-    VoiceIsolation,
+    TakeVoiceSettings, TimelineConfiguration, TimelineFrameMapping, TimelineSegment,
+    TimelineSource, VoiceDeclick, VoiceIsolation,
 };
 use ffmpeg::{
     ChannelLayout, filter, format as avformat, frame::Audio as FFAudio, software::resampling,
@@ -39,9 +39,15 @@ pub struct AudioRenderer {
     // this * channel count = cursor
     elapsed_samples: usize,
     music: MusicTracks,
+    takes: HashMap<String, Arc<DecodedAudio>>,
+    take_enhancement: VoiceEnhancementCache,
+    take_scratch: Vec<f32>,
     transition_outgoing: Vec<f32>,
     transition_incoming: Vec<f32>,
-    speed_audio_processors: [Option<SpeedAudioProcessorSlot>; 2],
+    // Two clips can be live at once during a transition, and each renders both
+    // with and without the mic while a take's edge fades across it.
+    speed_audio_processors: [Option<SpeedAudioProcessorSlot>; 4],
+    mic_replaced_scratch: Vec<f32>,
     speed_audio_use_counter: u64,
     voice_enhancement: VoiceEnhancementCache,
 }
@@ -160,6 +166,7 @@ struct SpeedAudioProcessorKey {
     mic_offset_bits: u32,
     system_offset_bits: u32,
     voice_tone: Option<VoiceToneSettings>,
+    suppress_mic: bool,
 }
 
 struct SpeedAudioProcessorSlot {
@@ -191,6 +198,7 @@ struct SpeedAudioProcessor {
 struct ClipAudio<'a> {
     data: &'a [AudioSegment],
     voice_tone: Option<VoiceToneSettings>,
+    suppress_mic: bool,
 }
 
 impl AudioRenderer {
@@ -212,23 +220,32 @@ impl AudioRenderer {
             },
             elapsed_samples: 0,
             music: MusicTracks::new(),
+            takes: HashMap::new(),
+            take_enhancement: VoiceEnhancementCache::default(),
+            take_scratch: Vec::new(),
             transition_outgoing: Vec::new(),
             transition_incoming: Vec::new(),
-            speed_audio_processors: [None, None],
+            speed_audio_processors: Default::default(),
+            mic_replaced_scratch: Vec::new(),
             speed_audio_use_counter: 0,
             voice_enhancement: VoiceEnhancementCache::default(),
         }
     }
 
     pub fn with_music(mut self, music: MusicTracks) -> Self {
+        self.takes = music
+            .iter()
+            .map(|(path, data)| (path.clone(), Arc::new(DecodedAudio::from(data.clone()))))
+            .collect();
         self.music = music;
         self
     }
 
     pub fn set_playhead(&mut self, playhead: f64, project: &ProjectConfiguration) {
         self.elapsed_samples = self.playhead_to_samples(playhead);
-        self.speed_audio_processors = [None, None];
+        self.speed_audio_processors = Default::default();
         self.voice_enhancement = VoiceEnhancementCache::default();
+        self.take_enhancement = VoiceEnhancementCache::default();
 
         self.cursor = match project.get_segment_time(playhead) {
             Some((segment_time, segment)) => AudioRendererCursor {
@@ -284,6 +301,7 @@ impl AudioRenderer {
 
             if !self.music.is_empty() && !timeline.audio_segments.is_empty() {
                 mix_music(&self.music, timeline, frame_start, written, &mut buf);
+                self.mix_takes(project, timeline, frame_start, written, &mut buf);
             }
 
             return Some((written, buf));
@@ -705,7 +723,124 @@ impl AudioRenderer {
         out_offset: usize,
         out: &mut [f32],
     ) -> usize {
-        self.render_chunk_at_cursor(project, self.cursor, None, samples, out_offset, out)
+        self.render_chunk_at_cursor(
+            project,
+            self.cursor,
+            None,
+            false,
+            samples,
+            ChunkOutput { out_offset, out },
+        )
+    }
+
+    fn mix_takes(
+        &mut self,
+        project: &ProjectConfiguration,
+        timeline: &TimelineConfiguration,
+        frame_start: usize,
+        samples: usize,
+        out: &mut [f32],
+    ) {
+        let sample_rate = AudioData::SAMPLE_RATE as f64;
+        let frame_end = (frame_start + samples) as i64;
+
+        for (index, segment) in timeline.audio_segments.iter().enumerate() {
+            let Some(voice) = &segment.voice else {
+                continue;
+            };
+            if !segment.enabled || segment.end <= segment.start {
+                continue;
+            }
+            let (Some(source), Some(data)) =
+                (self.takes.get(&segment.path), self.music.get(&segment.path))
+            else {
+                continue;
+            };
+            let (gain, improve, isolation, stereo_mode) = match voice {
+                TakeVoiceSettings::MatchRecording => {
+                    if project.audio.mute {
+                        continue;
+                    }
+                    (
+                        project.audio.mic_volume_db + segment.volume_db,
+                        project.audio.improve,
+                        project.audio.isolation,
+                        &project.audio.mic_stereo_mode,
+                    )
+                }
+                TakeVoiceSettings::Custom {
+                    improve,
+                    isolation,
+                    stereo_mode,
+                } => (segment.volume_db, *improve, *isolation, stereo_mode),
+            };
+            if gain < -30.0 {
+                continue;
+            }
+
+            let start_sample = (segment.start * sample_rate).round() as i64;
+            let end_sample = (segment.end * sample_rate).round() as i64;
+            let lo = start_sample.max(frame_start as i64);
+            let hi = end_sample.min(frame_end);
+            if lo >= hi {
+                continue;
+            }
+
+            let trim_sample = (segment.trim_start.max(0.0) * sample_rate).round() as i64;
+            let offset = trim_sample - start_sample - data.source_start_sample() as i64;
+            let first = lo + offset;
+            if first < 0 || first as usize >= source.sample_count() {
+                continue;
+            }
+            let count = ((hi - lo) as usize).min(source.sample_count() - first as usize);
+            let fade_in = (segment.fade_in.max(0.0) * sample_rate).round() as i64;
+            let fade_out = (segment.fade_out.max(0.0) * sample_rate).round() as i64;
+            let segment_len = end_sample - start_sample;
+
+            let mut scratch = std::mem::take(&mut self.take_scratch);
+            for block in (0..count).step_by(EXPORT_AUDIO_BLOCK_SAMPLES) {
+                let block_len = (count - block).min(EXPORT_AUDIO_BLOCK_SAMPLES);
+                let block_start = lo + block as i64;
+                scratch.clear();
+                scratch.resize(block_len * 2, 0.0);
+                let enhanced = if improve && (1..=2).contains(&source.channels()) {
+                    self.take_enhancement.render(
+                        (index, 0),
+                        source,
+                        (block_start + offset) as usize,
+                        block_len,
+                        Some(isolation),
+                        None,
+                    )
+                } else {
+                    None
+                };
+                let voice_source = enhanced.as_ref().map_or(
+                    VoiceSource::Original(source.as_ref()),
+                    VoiceSource::Enhanced,
+                );
+                let rendered = cap_audio::render_audio(
+                    &[AudioRendererTrack {
+                        data: &voice_source,
+                        gain,
+                        stereo_mode: audio_stereo_mode(stereo_mode),
+                        offset: offset as isize,
+                    }],
+                    block_start as usize,
+                    block_len,
+                    0,
+                    &mut scratch,
+                );
+                for (i, frame) in scratch[..rendered * 2].chunks_exact(2).enumerate() {
+                    let out_sample = block_start + i as i64;
+                    let g = segment_fade(out_sample - start_sample, segment_len, fade_in, fade_out);
+                    let out_index = (out_sample as usize - frame_start) * 2;
+                    out[out_index] = (out[out_index] + frame[0] * g).clamp(-1.0, 1.0);
+                    out[out_index + 1] = (out[out_index + 1] + frame[1] * g).clamp(-1.0, 1.0);
+                }
+            }
+            self.take_scratch = scratch;
+        }
     }
 
     fn render_segment_chunk(
@@ -716,21 +851,71 @@ impl AudioRenderer {
         out_offset: usize,
         out: &mut [f32],
     ) -> usize {
-        let rendered = if source.segment.timescale == 1.0 {
-            if source.segment.speed_audio_mode == Some(ClipSpeedAudioMode::Mute) {
-                return 0;
+        if source.segment.timescale == 1.0
+            && source.segment.speed_audio_mode == Some(ClipSpeedAudioMode::Mute)
+        {
+            return 0;
+        }
+
+        let gate = project.timeline.as_ref().and_then(|timeline| {
+            mic_replacement_gate(&timeline.audio_segments, self.elapsed_samples, samples)
+        });
+        let rendered = match gate {
+            None => self.render_segment_source(project, source, samples, out_offset, out, false),
+            Some(gate) if gate.iter().all(|value| *value >= 1.0) => {
+                self.render_segment_source(project, source, samples, out_offset, out, true)
             }
-            let cursor = source_cursor(source, self.playhead_to_samples(source.source_time));
-            let voice_tone = segment_voice_tone(source.segment);
-            self.render_chunk_at_cursor(project, cursor, voice_tone, samples, out_offset, out)
-        } else {
-            self.render_speed_audio_chunk(project, source, samples, out_offset, out)
+            Some(gate) => {
+                let rendered =
+                    self.render_segment_source(project, source, samples, out_offset, out, false);
+                let mut replaced = std::mem::take(&mut self.mic_replaced_scratch);
+                replaced.clear();
+                replaced.resize(samples * 2, 0.0);
+                let replaced_rendered =
+                    self.render_segment_source(project, source, samples, 0, &mut replaced, true);
+                let rendered = rendered.max(replaced_rendered);
+                let region = &mut out[out_offset..out_offset + rendered * 2];
+                for ((with_mic, without_mic), value) in region
+                    .chunks_exact_mut(2)
+                    .zip(replaced.chunks_exact(2))
+                    .zip(&gate)
+                {
+                    with_mic[0] += (without_mic[0] - with_mic[0]) * value;
+                    with_mic[1] += (without_mic[1] - with_mic[1]) * value;
+                }
+                self.mic_replaced_scratch = replaced;
+                rendered
+            }
         };
         apply_clip_volume(
             &mut out[out_offset..out_offset + rendered * 2],
             source.segment,
         );
         rendered
+    }
+
+    fn render_segment_source(
+        &mut self,
+        project: &ProjectConfiguration,
+        source: TimelineSource<'_>,
+        samples: usize,
+        out_offset: usize,
+        out: &mut [f32],
+        suppress_mic: bool,
+    ) -> usize {
+        if source.segment.timescale == 1.0 {
+            let cursor = source_cursor(source, self.playhead_to_samples(source.source_time));
+            self.render_chunk_at_cursor(
+                project,
+                cursor,
+                segment_voice_tone(source.segment),
+                suppress_mic,
+                samples,
+                ChunkOutput { out_offset, out },
+            )
+        } else {
+            self.render_speed_audio_chunk(project, source, samples, out_offset, out, suppress_mic)
+        }
     }
 
     fn render_speed_audio_chunk(
@@ -740,6 +925,7 @@ impl AudioRenderer {
         samples: usize,
         out_offset: usize,
         out: &mut [f32],
+        suppress_mic: bool,
     ) -> usize {
         if samples == 0
             || project.audio.mute
@@ -778,6 +964,7 @@ impl AudioRenderer {
             mic_offset_bits: offsets.mic.to_bits(),
             system_offset_bits: offsets.system_audio.to_bits(),
             voice_tone: segment_voice_tone(source.segment),
+            suppress_mic,
         };
         let requested_source_sample = source.source_time * Self::SAMPLE_RATE as f64;
         self.speed_audio_use_counter = self.speed_audio_use_counter.saturating_add(1);
@@ -824,6 +1011,7 @@ impl AudioRenderer {
                 ClipAudio {
                     data: &self.data,
                     voice_tone: key.voice_tone,
+                    suppress_mic: key.suppress_mic,
                 },
                 project,
                 requested_source_sample,
@@ -853,20 +1041,21 @@ impl AudioRenderer {
         project: &ProjectConfiguration,
         cursor: AudioRendererCursor,
         voice_tone: Option<VoiceToneSettings>,
+        suppress_mic: bool,
         samples: usize,
-        out_offset: usize,
-        out: &mut [f32],
+        output: ChunkOutput<'_>,
     ) -> usize {
         render_audio_data_chunk(
             ClipAudio {
                 data: &self.data,
                 voice_tone,
+                suppress_mic,
             },
             project,
             cursor,
             samples,
-            out_offset,
-            out,
+            output.out_offset,
+            output.out,
             &mut self.voice_enhancement,
         )
     }
@@ -939,6 +1128,11 @@ pub(crate) fn segment_voice_tone(segment: &TimelineSegment) -> Option<VoiceToneS
     settings.is_active().then_some(settings)
 }
 
+struct ChunkOutput<'a> {
+    out_offset: usize,
+    out: &'a mut [f32],
+}
+
 fn render_audio_data_chunk(
     clip: ClipAudio<'_>,
     project: &ProjectConfiguration,
@@ -948,7 +1142,11 @@ fn render_audio_data_chunk(
     out: &mut [f32],
     enhancement: &mut VoiceEnhancementCache,
 ) -> usize {
-    let ClipAudio { data, voice_tone } = clip;
+    let ClipAudio {
+        data,
+        voice_tone,
+        suppress_mic,
+    } = clip;
     let Some(segment) = data.get(cursor.clip_index as usize) else {
         return 0;
     };
@@ -984,7 +1182,7 @@ fn render_audio_data_chunk(
         .iter()
         .map(|track| AudioRendererTrack {
             data: track.data().as_ref(),
-            gain: if project.audio.mute {
+            gain: if project.audio.mute || (suppress_mic && track.is_microphone) {
                 f32::NEG_INFINITY
             } else {
                 let gain = track.gain(&project.audio);
@@ -1416,6 +1614,65 @@ fn music_gain(volume_db: f32) -> f32 {
     }
 }
 
+const MIC_REPLACEMENT_RAMP_SECS: f64 = 0.015;
+
+fn mic_replacement_gate(
+    audio_segments: &[cap_project::AudioTrackSegment],
+    frame_start: usize,
+    samples: usize,
+) -> Option<Vec<f32>> {
+    let sample_rate = AudioData::SAMPLE_RATE as f64;
+    let frame_end = frame_start + samples;
+    let mut gate: Option<Vec<f32>> = None;
+
+    for segment in audio_segments {
+        if !segment.replaces_mic || !segment.enabled || segment.end <= segment.start {
+            continue;
+        }
+
+        let start = (segment.start.max(0.0) * sample_rate).round() as usize;
+        let end = (segment.end * sample_rate).round() as usize;
+        let lo = start.max(frame_start);
+        let hi = end.min(frame_end);
+        if lo >= hi {
+            continue;
+        }
+
+        let ramp = ((MIC_REPLACEMENT_RAMP_SECS * sample_rate).round() as usize)
+            .min((end - start) / 2)
+            .max(1);
+        let gate = gate.get_or_insert_with(|| vec![0.0; samples]);
+        for sample in lo..hi {
+            let edge_distance = (sample - start + 1).min(end - sample);
+            let value = (edge_distance as f32 / ramp as f32).min(1.0);
+            let slot = &mut gate[sample - frame_start];
+            *slot = slot.max(value);
+        }
+    }
+
+    gate
+}
+
+fn segment_fade(local: i64, len: i64, fade_in: i64, fade_out: i64) -> f32 {
+    let mut gain = 1.0;
+    if fade_in > 0 && local < fade_in {
+        gain *= local as f32 / fade_in as f32;
+    }
+    let until_end = len - local;
+    if fade_out > 0 && until_end <= fade_out {
+        gain *= (until_end as f32 / fade_out as f32).clamp(0.0, 1.0);
+    }
+    gain
+}
+
+fn audio_stereo_mode(mode: &cap_project::StereoMode) -> StereoMode {
+    match mode {
+        cap_project::StereoMode::Stereo => StereoMode::Stereo,
+        cap_project::StereoMode::MonoL => StereoMode::MonoL,
+        cap_project::StereoMode::MonoR => StereoMode::MonoR,
+    }
+}
+
 /// Mixes timeline-positioned music tracks into an already-rendered, interleaved
 /// stereo buffer covering output samples `[frame_start, frame_start + samples)`.
 ///
@@ -1439,7 +1696,7 @@ fn mix_music(
     let mut mixed = vec![false; samples];
 
     for segment in &timeline.audio_segments {
-        if !segment.enabled || segment.end <= segment.start {
+        if !segment.enabled || segment.end <= segment.start || segment.voice.is_some() {
             continue;
         }
 
@@ -1481,14 +1738,7 @@ fn mix_music(
                 continue;
             }
 
-            let mut g = gain;
-            if fade_in > 0 && local < fade_in {
-                g *= local as f32 / fade_in as f32;
-            }
-            let until_end = segment_len - local;
-            if fade_out > 0 && until_end <= fade_out {
-                g *= (until_end as f32 / fade_out as f32).clamp(0.0, 1.0);
-            }
+            let g = gain * segment_fade(local, segment_len, fade_in, fade_out);
             if g <= 0.0 {
                 continue;
             }
@@ -2180,6 +2430,14 @@ fn render_is_origin_independent(
         return false;
     };
     if !timeline.transitions.is_empty() || !timeline.hold_windows().is_empty() {
+        return false;
+    }
+    if timeline.audio_segments.iter().any(|segment| {
+        matches!(
+            segment.voice,
+            Some(TakeVoiceSettings::Custom { improve: true, .. })
+        )
+    }) {
         return false;
     }
     let rate = AudioData::SAMPLE_RATE as f64;
@@ -4749,6 +5007,8 @@ mod tests {
             fade_in,
             fade_out,
             duration: Some(end - start),
+            replaces_mic: false,
+            voice: None,
         }
     }
 
@@ -5411,6 +5671,237 @@ mod tests {
             );
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
+    }
+
+    fn punch_in_fixture(
+        segments: Vec<TimelineSegment>,
+        takes: Vec<cap_project::AudioTrackSegment>,
+    ) -> (TempDir, AudioRenderer, ProjectConfiguration) {
+        let _ = ffmpeg::init();
+        let dir = tempfile::tempdir().unwrap();
+        let mic_path = dir.path().join("mic.wav");
+        let system_path = dir.path().join("system.wav");
+        write_step_wav(&mic_path, &[8000; 4]);
+        write_step_wav(&system_path, &[2000; 4]);
+
+        let data = vec![AudioSegment {
+            tracks: vec![
+                AudioSegmentTrack::new(
+                    Arc::new(AudioData::from_file(&mic_path).unwrap()),
+                    gain,
+                    stereo,
+                    no_offset,
+                )
+                .with_microphone_enhancement(),
+                AudioSegmentTrack::new(
+                    Arc::new(AudioData::from_file(&system_path).unwrap()),
+                    gain,
+                    stereo,
+                    no_offset,
+                ),
+            ],
+        }];
+
+        let mut project = music_project(takes);
+        project.timeline.as_mut().unwrap().segments = segments;
+        (dir, AudioRenderer::new(data), project)
+    }
+
+    fn punch_in_take(start: f64, end: f64) -> cap_project::AudioTrackSegment {
+        cap_project::AudioTrackSegment {
+            replaces_mic: true,
+            ..music_track_segment("take.ogg", start, end, 0.0, 0.0)
+        }
+    }
+
+    #[test]
+    fn punch_in_take_silences_only_the_recorded_mic_over_its_range() {
+        let (_dir, mut renderer, project) = punch_in_fixture(
+            vec![segment(0, 0.0, 3.0, 1.0)],
+            vec![punch_in_take(1.0, 2.0)],
+        );
+        let stream = render_export_audio(&mut renderer, &project, 30, 3 * 30);
+
+        let both = expected(8000) + expected(2000);
+        assert!((left_at_second(&stream, 0) - both).abs() < 0.01);
+        assert!((left_at_second(&stream, 1) - expected(2000)).abs() < 0.01);
+        assert!((left_at_second(&stream, 2) - both).abs() < 0.01);
+    }
+
+    #[test]
+    fn punch_in_take_edges_fade_instead_of_clicking() {
+        let (_dir, mut renderer, project) = punch_in_fixture(
+            vec![segment(0, 0.0, 3.0, 1.0)],
+            vec![punch_in_take(1.0, 2.0)],
+        );
+        let stream = render_export_audio(&mut renderer, &project, 30, 3 * 30);
+
+        let sr = AudioData::SAMPLE_RATE as usize;
+        let largest_step = stream[(sr / 2) * 2..(sr * 5 / 2) * 2]
+            .chunks_exact(2)
+            .map(|frame| frame[0])
+            .collect::<Vec<_>>()
+            .windows(2)
+            .map(|pair| (pair[1] - pair[0]).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            largest_step < 0.001,
+            "mic cut is a {largest_step} step, expected a fade"
+        );
+    }
+
+    #[test]
+    fn disabled_or_plain_audio_clips_leave_the_recorded_mic_alone() {
+        let mut disabled = punch_in_take(1.0, 2.0);
+        disabled.enabled = false;
+        let music = music_track_segment("music.ogg", 1.0, 2.0, 0.0, 0.0);
+        let (_dir, mut renderer, project) =
+            punch_in_fixture(vec![segment(0, 0.0, 3.0, 1.0)], vec![disabled, music]);
+        let stream = render_export_audio(&mut renderer, &project, 30, 3 * 30);
+
+        let both = expected(8000) + expected(2000);
+        assert!((left_at_second(&stream, 1) - both).abs() < 0.01);
+    }
+
+    #[test]
+    fn punch_in_take_silences_mic_on_sped_up_clips() {
+        let mut clip = segment(0, 0.0, 4.0, 2.0);
+        clip.speed_audio_mode = Some(ClipSpeedAudioMode::MaintainPitch);
+        let (_dir, mut renderer, project) =
+            punch_in_fixture(vec![clip], vec![punch_in_take(0.5, 1.5)]);
+        let stream = render_export_audio(&mut renderer, &project, 30, 2 * 30);
+
+        let sr = AudioData::SAMPLE_RATE as usize;
+        let window = |from: f64, to: f64| {
+            mean_abs(&stream[(from * sr as f64) as usize * 2..(to * sr as f64) as usize * 2])
+        };
+        let both = expected(8000) + expected(2000);
+        assert!(
+            (window(0.2, 0.4) - both).abs() < 0.03,
+            "{}",
+            window(0.2, 0.4)
+        );
+        assert!(
+            (window(0.7, 1.3) - expected(2000)).abs() < 0.03,
+            "{}",
+            window(0.7, 1.3)
+        );
+        assert!(
+            (window(1.6, 1.9) - both).abs() < 0.03,
+            "{}",
+            window(1.6, 1.9)
+        );
+    }
+
+    fn voice_take(path: &str, voice: TakeVoiceSettings) -> cap_project::AudioTrackSegment {
+        cap_project::AudioTrackSegment {
+            replaces_mic: true,
+            voice: Some(voice),
+            ..music_track_segment(path, 0.0, 3.0, 0.0, 0.0)
+        }
+    }
+
+    fn configured_mic_track(path: &Path) -> AudioSegmentTrack {
+        AudioSegmentTrack::new(
+            Arc::new(AudioData::from_file(path).unwrap()),
+            |c| c.mic_volume_db,
+            |c| audio_stereo_mode(&c.mic_stereo_mode),
+            no_offset,
+        )
+        .with_microphone_enhancement()
+    }
+
+    #[test]
+    fn take_matching_the_recording_renders_like_the_recorded_mic() {
+        let _ = ffmpeg::init();
+        let dir = tempfile::tempdir().unwrap();
+        let voice_path = dir.path().join("voice.wav");
+        write_sine_wav(&voice_path, 220.0, 3.0);
+
+        let mut project = music_project(Vec::new());
+        project.audio.improve = true;
+        project.audio.mic_volume_db = -6.0;
+        project.audio.mic_stereo_mode = cap_project::StereoMode::MonoL;
+
+        let mic = || {
+            vec![AudioSegment {
+                tracks: vec![configured_mic_track(&voice_path)],
+            }]
+        };
+        let mut original = AudioRenderer::new(mic());
+        let reference = render_export_audio(&mut original, &project, 30, 3 * 30);
+
+        let mut music = MusicTracks::new();
+        music.insert(
+            "voice.wav".to_string(),
+            Arc::new(AudioData::from_file(&voice_path).unwrap()),
+        );
+        project.timeline.as_mut().unwrap().audio_segments =
+            vec![voice_take("voice.wav", TakeVoiceSettings::MatchRecording)];
+        let mut punched = AudioRenderer::new(mic()).with_music(music);
+        let stream = render_export_audio(&mut punched, &project, 30, 3 * 30);
+
+        let sr = AudioData::SAMPLE_RATE as usize;
+        let interior = (sr / 10) * 2..(sr * 29 / 10) * 2;
+        assert!(mean_abs(&reference[interior.clone()]) > 0.01);
+        let worst = reference[interior.clone()]
+            .iter()
+            .zip(&stream[interior])
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(worst < 1e-3, "take differs from the mic by {worst}");
+    }
+
+    #[test]
+    fn custom_take_ignores_the_recording_mic_settings() {
+        let _ = ffmpeg::init();
+        let dir = tempfile::tempdir().unwrap();
+        let take_path = dir.path().join("take.wav");
+        write_step_wav(&take_path, &[8000; 3]);
+        let mut music = MusicTracks::new();
+        music.insert(
+            "take.wav".to_string(),
+            Arc::new(AudioData::from_file(&take_path).unwrap()),
+        );
+
+        let custom = TakeVoiceSettings::Custom {
+            improve: false,
+            isolation: VoiceIsolation::Balanced,
+            stereo_mode: cap_project::StereoMode::Stereo,
+        };
+        let mut project = music_project(vec![voice_take("take.wav", custom)]);
+        project.audio.mic_volume_db = -12.0;
+        let mut renderer = AudioRenderer::new(vec![]).with_music(music.clone());
+        let stream = render_export_audio(&mut renderer, &project, 30, 3 * 30);
+        assert!((left_at_second(&stream, 1) - expected(8000)).abs() < 0.01);
+
+        project.timeline.as_mut().unwrap().audio_segments =
+            vec![voice_take("take.wav", TakeVoiceSettings::MatchRecording)];
+        let mut renderer = AudioRenderer::new(vec![]).with_music(music);
+        let stream = render_export_audio(&mut renderer, &project, 30, 3 * 30);
+        let quieter = expected(8000) * 10f32.powf(-12.0 / 20.0);
+        assert!((left_at_second(&stream, 1) - quieter).abs() < 0.01);
+    }
+
+    #[test]
+    fn enhanced_custom_takes_rule_out_origin_independent_reuse() {
+        let info = AudioRenderer::info();
+        let mut project = music_project(vec![voice_take(
+            "take.wav",
+            TakeVoiceSettings::MatchRecording,
+        )]);
+        let duration = project.timeline.as_ref().unwrap().duration();
+        assert!(render_is_origin_independent(&project, info, duration));
+
+        project.timeline.as_mut().unwrap().audio_segments = vec![voice_take(
+            "take.wav",
+            TakeVoiceSettings::Custom {
+                improve: true,
+                isolation: VoiceIsolation::Balanced,
+                stereo_mode: cap_project::StereoMode::Stereo,
+            },
+        )];
+        assert!(!render_is_origin_independent(&project, info, duration));
     }
 
     #[test]
