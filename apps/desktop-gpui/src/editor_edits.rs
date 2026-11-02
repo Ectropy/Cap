@@ -1980,6 +1980,8 @@ pub fn default_audio_segment(
         fade_in: 0.0,
         fade_out: 0.0,
         duration,
+        replaces_mic: false,
+        voice: None,
     }
 }
 

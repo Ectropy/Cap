@@ -119,5 +119,7 @@ pub fn add_music(
         fade_in: 0.0,
         fade_out: 0.0,
         duration: Some(MUSIC_SECS),
+        replaces_mic: false,
+        voice: None,
     });
 }

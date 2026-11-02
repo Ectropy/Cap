@@ -282,6 +282,7 @@ pub struct EditorInstance {
     runtime_handle: tokio::runtime::Handle,
     audio_output: Arc<crate::AudioOutput>,
     preview_speed: crate::PreviewSpeedHandle,
+    last_playback_clock: std::sync::Mutex<Option<crate::playback::PlaybackClock>>,
 }
 
 impl EditorInstance {
@@ -693,6 +694,7 @@ impl EditorInstance {
             runtime_handle: tokio::runtime::Handle::current(),
             audio_output,
             preview_speed: crate::PreviewSpeedHandle::default(),
+            last_playback_clock: std::sync::Mutex::new(None),
         });
 
         this.state.lock().await.preview_task =
@@ -820,6 +822,7 @@ impl EditorInstance {
             runtime_handle: self.runtime_handle.clone(),
             audio_output: self.audio_output.clone(),
             preview_speed: self.preview_speed.clone(),
+            last_playback_clock: std::sync::Mutex::new(None),
         });
         next.state.lock().await.preview_task =
             Some(next.clone().spawn_preview_renderer(preview_rx));
@@ -921,6 +924,17 @@ impl EditorInstance {
         .unwrap_or_default()
     }
 
+    pub fn last_playback_clock_anchor(&self) -> Option<crate::PlaybackClockAnchor> {
+        let clock = self
+            .last_playback_clock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()?;
+        *clock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     pub async fn start_playback(self: &Arc<Self>, fps: u32, resolution_base: XY<u32>) {
         if let Err(error) = self
             .start_playback_with_handle(fps, resolution_base, None)
@@ -1009,6 +1023,10 @@ impl EditorInstance {
             }
 
             let prev = state.playback_task.replace(playback_handle.clone());
+            *self
+                .last_playback_clock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(playback_handle.clock());
 
             (playback_handle, prev, epoch)
         };
