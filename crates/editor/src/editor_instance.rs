@@ -322,6 +322,7 @@ pub struct EditorInstance {
     hover_analysis_cancel: Arc<AtomicBool>,
     hover_analysis_started: AtomicBool,
     preview_activity_ms: AtomicU64,
+    last_playback_clock: std::sync::Mutex<Option<crate::playback::PlaybackClock>>,
 }
 
 /// Background hover analysis waits this long after the last preview request,
@@ -782,6 +783,7 @@ impl EditorInstance {
             hover_analysis_cancel: Arc::new(AtomicBool::new(false)),
             hover_analysis_started: AtomicBool::new(false),
             preview_activity_ms: AtomicU64::new(0),
+            last_playback_clock: std::sync::Mutex::new(None),
         });
 
         this.state.lock().await.preview_task =
@@ -1022,6 +1024,7 @@ impl EditorInstance {
             hover_analysis_cancel: Arc::new(AtomicBool::new(false)),
             hover_analysis_started: AtomicBool::new(false),
             preview_activity_ms: AtomicU64::new(0),
+            last_playback_clock: std::sync::Mutex::new(None),
         });
         next.state.lock().await.preview_task =
             Some(next.clone().spawn_preview_renderer(preview_rx));
@@ -1125,6 +1128,17 @@ impl EditorInstance {
         .unwrap_or_default()
     }
 
+    pub fn last_playback_clock_anchor(&self) -> Option<crate::PlaybackClockAnchor> {
+        let clock = self
+            .last_playback_clock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()?;
+        *clock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     pub async fn start_playback(self: &Arc<Self>, fps: u32, resolution_base: XY<u32>) {
         if let Err(error) = self
             .start_playback_with_handle(fps, resolution_base, None)
@@ -1213,6 +1227,10 @@ impl EditorInstance {
             }
 
             let prev = state.playback_task.replace(playback_handle.clone());
+            *self
+                .last_playback_clock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(playback_handle.clock());
 
             (playback_handle, prev, epoch)
         };

@@ -51,6 +51,8 @@ async fn main() {
             fade_in: 0.0,
             fade_out: 0.0,
             duration: Some(3600.0),
+            replaces_mic: false,
+            voice: None,
         });
     }
     let delayed_cold = std::env::args().nth(3).as_deref() == Some("delayed-cold");
