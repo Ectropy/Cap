@@ -82,6 +82,7 @@ use crate::{
 mod frame;
 mod loading;
 mod markers;
+pub(crate) mod punch_in;
 mod scenes;
 mod snap;
 mod style_preset_ui;
@@ -1473,6 +1474,7 @@ pub struct EditorWindow {
     pub(crate) selection: Option<Selection>,
     /// `editorState.timeline.interactMode === "split"`.
     split_mode: bool,
+    punch_in: punch_in::PunchInState,
     /// `editorState.timeline.splitPreview` -- `(time, snapped)`.
     split_preview: Option<(f64, bool)>,
     /// The segment under the pointer: `(track, lane, index)`. This is the
@@ -2214,6 +2216,7 @@ impl EditorWindow {
             history: ProjectHistory::new(ProjectConfiguration::default()),
             selection: None,
             split_mode: false,
+            punch_in: punch_in::PunchInState::default(),
             split_preview: None,
             hovered_segment: None,
             scene_preview_time: None,
@@ -2650,7 +2653,7 @@ impl EditorWindow {
         self.end_field_edit(cx);
         self.close_color_picker(cx);
         self.dismiss_frame_controls(cx);
-        if !change(&mut self.project) {
+        if self.punch_in.is_active() || !change(&mut self.project) {
             return false;
         }
         self.set_selection(None, cx);
@@ -2847,7 +2850,10 @@ impl EditorWindow {
         let Some(instance) = &self.instance else {
             return;
         };
-        instance.project_config.0.send(self.project.clone()).ok();
+        let mut project = self.project.clone();
+        self.punch_in
+            .mute_recorded_mic(&mut project, self.total_duration());
+        instance.project_config.0.send(project).ok();
         if !self.playing {
             let time = self.view.preview_time.unwrap_or(self.playhead).max(0.0);
             request_frame(
@@ -2886,6 +2892,9 @@ impl EditorWindow {
     /// store. The playhead is not moved and the selection is not restored;
     /// neither is in the snapshot (`editorState` is a separate store).
     pub(crate) fn undo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.punch_in.is_active() {
+            return;
+        }
         self.close_frame_controls(window, cx);
         self.end_field_edit(cx);
         self.close_color_picker(cx);
@@ -2898,6 +2907,9 @@ impl EditorWindow {
     }
 
     pub(crate) fn redo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.punch_in.is_active() {
+            return;
+        }
         self.close_frame_controls(window, cx);
         self.end_field_edit(cx);
         self.close_color_picker(cx);
@@ -3416,6 +3428,7 @@ impl EditorWindow {
             self.view.playing = false;
             self.report_playback();
         }
+        self.punch_in.finish_on_stop();
         cx.notify();
     }
 
@@ -3543,6 +3556,12 @@ impl EditorWindow {
     /// `handlePlayPauseClick` (`Player.tsx:212-233`), verbatim: at the end,
     /// restart from 0; playing, stop; otherwise seek to the playhead and go.
     pub fn toggle_play(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.punch_in.is_active() {
+            if self.punch_in.is_recording() {
+                self.stop_playback(cx);
+            }
+            return;
+        }
         if self.preparing_transport_active() {
             if self.preparing_controls_ready() {
                 let seek = self.is_at_end().then_some(0.0);
@@ -3631,6 +3650,9 @@ impl EditorWindow {
     /// `seek_to_time` minus the invalidation. False when the seek went to the
     /// preparing transport, which redraws through its own events.
     fn apply_seek(&mut self, time: f64) -> bool {
+        if self.punch_in.is_active() {
+            return false;
+        }
         // Moving the playhead by hand ends any shot audition.
         self.play_until = None;
         if self.preparing_transport_active() {
@@ -3891,6 +3913,12 @@ impl EditorWindow {
                 window.refresh();
                 return;
             }
+        }
+
+        if self.punch_in.is_recording() && event.keystroke.key == "escape" && !event.is_held {
+            self.cancel_punch_in(cx);
+            cx.stop_propagation();
+            return;
         }
 
         if self.lane_reorder.is_some() && event.keystroke.key == "escape" && !event.is_held {
@@ -4221,6 +4249,15 @@ impl EditorWindow {
             "c" => {
                 cx.stop_propagation();
                 self.split_at_playhead(window, cx);
+            }
+            "i" | "o" => {
+                cx.stop_propagation();
+                let mark = if keystroke.key == "i" {
+                    punch_in::PunchMark::In
+                } else {
+                    punch_in::PunchMark::Out
+                };
+                self.set_punch_mark(mark, cx);
             }
             "escape" => {
                 cx.stop_propagation();
@@ -5728,6 +5765,7 @@ impl EditorWindow {
         };
         let committed = self.edit(
             |timeline| {
+                let before = timeline.clone();
                 let Some(segment) = timeline.segments.get_mut(draft.index) else {
                     return false;
                 };
@@ -5736,6 +5774,7 @@ impl EditorWindow {
                 }
                 segment.start = draft.start;
                 segment.end = draft.end;
+                punch_in::keep_takes_on_their_lines(&before, timeline);
                 true
             },
             window,
@@ -7754,6 +7793,8 @@ impl EditorWindow {
             Some(tr::editor::window::busy::export())
         } else if self.clips.is_importing() {
             Some(tr::editor::window::busy::clip_import())
+        } else if self.punch_in.is_active() {
+            Some(tr::editor::window::busy::punch_in())
         } else {
             None
         }
@@ -11381,6 +11422,7 @@ impl EditorWindow {
                     .items_center()
                     .child(self.render_markers_button(compact, cx))
                     .child(self.header_divider())
+                    .child(self.render_punch_in_button(narrow, cx))
                     // The split toggle (`Player.tsx:409-427`).
                     .child(
                         div()
@@ -11524,6 +11566,42 @@ impl EditorWindow {
         } else {
             trigger
         }
+    }
+
+    fn render_punch_in_button(&self, narrow: bool, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let tooltip = SharedString::from(self.punch_in_tooltip());
+        let recording = self.punch_in.is_recording();
+        let keys: &'static [&'static str] = if recording { &["Space"] } else { &["I", "O"] };
+        let label = (!narrow || self.punch_in.is_active()).then(|| self.punch_in_label());
+        div()
+            .id("transport-punch-in-tooltip")
+            .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
+            .tooltip(move |_, cx| {
+                ui::Tooltip::new(&theme, tooltip.clone())
+                    .keys(keys.iter().copied())
+                    .view(cx)
+            })
+            .child(
+                ui::Button::plain(
+                    &theme,
+                    "transport-punch-in",
+                    if self.punch_in.is_active() {
+                        ui::ButtonVariant::Destructive
+                    } else {
+                        ui::ButtonVariant::Gray
+                    },
+                    ui::ButtonSize::Sm,
+                )
+                .icon("icons/microphone.svg")
+                .when_some(label, |button, label| button.label(label))
+                .radius(px(7.))
+                .disabled(!self.project_ready() || self.punch_in.is_transitioning())
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.toggle_punch_in(window, cx);
+                    window.refresh();
+                })),
+            )
     }
 
     // -- Timeline ------------------------------------------------------------
@@ -11705,6 +11783,13 @@ impl EditorWindow {
             // column.
             .children(ghost_x.map(|x| timeline::render_preview_line(&theme, x)))
             .children(self.render_marker_lines(viewport_width))
+            .children(timeline::render_punch_marks(
+                &theme,
+                self.view,
+                content_width,
+                self.punch_in.marks.start,
+                self.punch_in.marks.end,
+            ))
             // The playhead (`:1279-1295`). It dims to 50 % in split
             // mode, where the cut line is the thing to watch
             // (`TL/index.tsx:1281`).
@@ -11713,6 +11798,9 @@ impl EditorWindow {
                 playhead_x,
                 if self.split_mode { 0.5 } else { 1. },
             ))
+            .when(self.punch_in.is_active(), |card| {
+                card.child(div().absolute().inset_0().occlude())
+            })
             // The split preview (`TL/index.tsx:1296-1316`): a 1px
             // column at the cut, the accent with an 8px marker when it
             // snapped to a boundary and grey otherwise.

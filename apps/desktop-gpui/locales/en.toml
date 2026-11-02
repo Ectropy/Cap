@@ -1848,7 +1848,13 @@ change_hint = "Tap to change track"
 fade_in = "Fade In"
 fade_out = "Fade Out"
 fallback_name = "Audio"
+replaces_mic = "Replace recorded mic"
+take_voice = "Take voice"
 title = "Audio {number}"
+voice_custom = "Custom"
+voice_match = "Match recording"
+voice_match_hint = "Uses the recording mic's volume, stereo mode and Studio Sound. The volume above adjusts the take on top of that."
+voice_none_hint = "Mixed as recorded, without voice processing. Pick an option to process it."
 volume = "Volume"
 
 [editor.panel.camera3d]
@@ -2950,6 +2956,7 @@ unsupported = { text = "Unsupported audio format: .{extension}", context = "{ext
 clip_import = "Wait for the clip import to finish before closing or deleting this recording."
 export = "Wait for the export or its cancellation to finish before closing or deleting this recording."
 opening = "Wait for the recording to finish opening before deleting it."
+punch_in = "Finish the take before closing or deleting this recording."
 save_before_delete_failed = "Could not save the recording before deleting it: {error}"
 
 [editor.window.camera3d_lane]
@@ -3069,6 +3076,23 @@ not_saved = "Title not saved"
 not_saved_message = { text = "{error}\n\nYour title is still in the editor. Try saving it again.", context = "{error} is the reason, shown above." }
 read_failed = "Could not read the recording title for {path}: {error}"
 save_failed = "Could not save the recording title for {path}: {error}"
+
+[editor.window.punch_in]
+button = "Re-record"
+mark_in = "In"
+mark_out = "Out"
+no_microphone = "Choose a microphone in Cap's main window first"
+recording_active = "Finish the current recording before recording a take"
+save_failed = { text = "Could not save the take: {error}", context = "{error} is a technical message that stays in English." }
+saving = "Saving…"
+start_failed = { text = "Could not record a take: {error}", context = "{error} is a technical message that stays in English." }
+starting = "Starting…"
+stop = "Stop"
+stopped_early = "Stopped before the punch-in point, so no take was kept"
+take_name = "Voiceover take"
+tooltip_from = "Re-record voiceover from {time}"
+tooltip_range = "Re-record voiceover {start}–{end}"
+tooltip_stop = "Stop take. Esc to discard."
 
 [editor.window.track]
 clear_all = "Clear all"

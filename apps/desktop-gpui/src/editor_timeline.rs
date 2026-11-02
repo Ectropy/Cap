@@ -4058,6 +4058,75 @@ pub fn render_playhead(theme: &Theme, x: f32, opacity: f32) -> AnyElement {
     )
 }
 
+pub fn render_punch_marks(
+    theme: &Theme,
+    view: TimelineView,
+    content_width: f32,
+    start: Option<f64>,
+    end: Option<f64>,
+) -> Vec<AnyElement> {
+    let color = Hsla::from(theme.editor.accent);
+    let secs_per_pixel = view.transform.secs_per_pixel(content_width);
+    let offset = |time: f64| ((time - view.transform.position) / secs_per_pixel) as f32;
+    let visible = |x: f32| (0.0..=content_width).contains(&x);
+    let mark = |x: f32, label: &'static str| {
+        div()
+            .absolute()
+            .left(px(TIMELINE_PADDING + TRACK_GUTTER + x))
+            .top(px(PLAYHEAD_TOP_OFFSET))
+            .bottom_0()
+            .w(px(1.))
+            .bg(color)
+            .child(
+                div()
+                    .absolute()
+                    .top(px(-7.))
+                    .left(px(2.))
+                    .px(px(4.))
+                    .rounded(px(3.))
+                    .bg(color)
+                    .text_size(px(10.))
+                    .line_height(px(14.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(gpui::white())
+                    .child(label),
+            )
+            .into_any_element()
+    };
+
+    let mut elements = Vec::new();
+    if let (Some(start), Some(end)) = (start, end)
+        && end > start
+    {
+        let left = offset(start).max(0.0);
+        let right = offset(end).min(content_width);
+        if right > left {
+            elements.push(
+                div()
+                    .absolute()
+                    .left(px(TIMELINE_PADDING + TRACK_GUTTER + left))
+                    .top(px(PLAYHEAD_TOP_OFFSET))
+                    .bottom_0()
+                    .w(px(right - left))
+                    .bg(with_alpha(color, 0.1))
+                    .into_any_element(),
+            );
+        }
+    }
+    elements.extend(
+        start
+            .map(offset)
+            .filter(|x| visible(*x))
+            .map(|x| mark(x, tr::editor::window::punch_in::mark_in())),
+    );
+    elements.extend(
+        end.map(offset)
+            .filter(|x| visible(*x))
+            .map(|x| mark(x, tr::editor::window::punch_in::mark_out())),
+    );
+    elements
+}
+
 /// The hover preview line (`TL/index.tsx:1255-1277`).
 pub fn render_preview_line(theme: &Theme, x: f32) -> AnyElement {
     let color = with_alpha(Hsla::from(theme.editor.text_3), 0.5);

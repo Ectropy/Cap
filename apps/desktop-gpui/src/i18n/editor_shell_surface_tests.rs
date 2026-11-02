@@ -77,6 +77,10 @@ const FORMATTED: &[&str] = &[
     "editor.window.open.meta_failed",
     "editor.window.open.not_found",
     "editor.window.presets.delete_confirm",
+    "editor.window.punch_in.save_failed",
+    "editor.window.punch_in.start_failed",
+    "editor.window.punch_in.tooltip_from",
+    "editor.window.punch_in.tooltip_range",
     "editor.window.save_failed",
     "editor.window.text_menu.segments",
     "editor.window.title.not_saved_message",
@@ -1259,6 +1263,33 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "No markers yet. Press M to mark the playhead, or add markers while you record.",
         ),
         (
+            tr::editor::window::busy::punch_in(),
+            "Finish the take before closing or deleting this recording.",
+        ),
+        (tr::editor::window::punch_in::button(), "Re-record"),
+        (tr::editor::window::punch_in::mark_in(), "In"),
+        (tr::editor::window::punch_in::mark_out(), "Out"),
+        (
+            tr::editor::window::punch_in::no_microphone(),
+            "Choose a microphone in Cap's main window first",
+        ),
+        (
+            tr::editor::window::punch_in::recording_active(),
+            "Finish the current recording before recording a take",
+        ),
+        (tr::editor::window::punch_in::saving(), "Saving…"),
+        (tr::editor::window::punch_in::starting(), "Starting…"),
+        (tr::editor::window::punch_in::stop(), "Stop"),
+        (
+            tr::editor::window::punch_in::stopped_early(),
+            "Stopped before the punch-in point, so no take was kept",
+        ),
+        (tr::editor::window::punch_in::take_name(), "Voiceover take"),
+        (
+            tr::editor::window::punch_in::tooltip_stop(),
+            "Stop take. Esc to discard.",
+        ),
+        (
             tr::editor::window::transport::split_tooltip(),
             "Click a segment to split. Esc to finish.",
         ),
@@ -1596,6 +1627,22 @@ fn editor_shell_messages_format_like_the_code_they_replaced() {
     assert_eq!(
         tr::editor::window::busy::save_before_delete_failed(&error),
         format!("Could not save the recording before deleting it: {error}")
+    );
+    assert_eq!(
+        tr::editor::window::punch_in::save_failed(&error),
+        format!("Could not save the take: {error}")
+    );
+    assert_eq!(
+        tr::editor::window::punch_in::start_failed(&error),
+        format!("Could not record a take: {error}")
+    );
+    assert_eq!(
+        tr::editor::window::punch_in::tooltip_from("0:05"),
+        "Re-record voiceover from 0:05"
+    );
+    assert_eq!(
+        tr::editor::window::punch_in::tooltip_range("0:05", "0:09"),
+        "Re-record voiceover 0:05–0:09"
     );
     assert_eq!(
         tr::editor::window::open::media_failed(&error),

@@ -249,6 +249,21 @@ fn editor_panels_match_the_literals_they_replaced() {
         (tr::editor::panel::audio::volume(), "Volume"),
         (tr::editor::panel::audio::fade_in(), "Fade In"),
         (tr::editor::panel::audio::fade_out(), "Fade Out"),
+        (
+            tr::editor::panel::audio::replaces_mic(),
+            "Replace recorded mic",
+        ),
+        (tr::editor::panel::audio::take_voice(), "Take voice"),
+        (tr::editor::panel::audio::voice_custom(), "Custom"),
+        (tr::editor::panel::audio::voice_match(), "Match recording"),
+        (
+            tr::editor::panel::audio::voice_match_hint(),
+            "Uses the recording mic's volume, stereo mode and Studio Sound. The volume above adjusts the take on top of that.",
+        ),
+        (
+            tr::editor::panel::audio::voice_none_hint(),
+            "Mixed as recorded, without voice processing. Pick an option to process it.",
+        ),
         (tr::editor::panel::mask::sensitive(), "Sensitive"),
         (tr::editor::panel::mask::highlight(), "Highlight"),
         (tr::editor::panel::mask::effect(), "Effect"),
