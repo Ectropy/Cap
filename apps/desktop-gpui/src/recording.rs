@@ -80,7 +80,7 @@ enum Handle {
 
 type SharedInstantUpload = Arc<tokio::sync::Mutex<Option<crate::upload::InstantUpload>>>;
 
-struct RecordingOwnedFeed<A: Actor>(ActorRef<A>);
+pub(crate) struct RecordingOwnedFeed<A: Actor>(ActorRef<A>);
 
 impl<A: Actor> Drop for RecordingOwnedFeed<A> {
     fn drop(&mut self) {
@@ -2780,7 +2780,7 @@ async fn setup_camera(
     Ok((owner, lock))
 }
 
-async fn setup_microphone(
+pub(crate) async fn setup_microphone(
     label: &str,
     settings: Option<microphone::MicrophoneDeviceSettings>,
     meter: Option<flume::Sender<microphone::MicrophoneSamples>>,

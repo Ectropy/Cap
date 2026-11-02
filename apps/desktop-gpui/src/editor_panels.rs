@@ -25,8 +25,9 @@
 use cap_project::{
     AudioTrackSegment, Camera3DBlur, Camera3DBlurMode, Camera3DKeyframe, Camera3DProperties,
     Camera3DSegment, CaptionTrackSegment, KeyboardTrackSegment, MaskKind, MaskSegment, SceneMode,
-    SceneSegment, SplitLayout, TextAlign, TextAnimation, TextBackgroundStyle, TextLayout,
-    TextSegment, TimelineConfiguration, XY, ZoomMode, ZoomSegment, mask_effect_contract,
+    SceneSegment, SplitLayout, StereoMode, TakeVoiceSettings, TextAlign, TextAnimation,
+    TextBackgroundStyle, TextLayout, TextSegment, TimelineConfiguration, VoiceIsolation, XY,
+    ZoomMode, ZoomSegment, mask_effect_contract,
 };
 use gpui::{
     AnyElement, AppContext, Context, Entity, FontWeight, Hsla, InteractiveElement, IntoElement,
@@ -39,7 +40,7 @@ use crate::{
     editor_sidebar::{
         ColorTarget, PadKey, PanelSection, SliderKey, collapsible, dashed_divider, with_alpha,
     },
-    editor_tabs::{OffsetKind, SidebarMenu},
+    editor_tabs::{OffsetKind, STEREO_MODES, SidebarMenu},
     editor_timeline::TrackKind,
     editor_window::EditorWindow,
     i18n::tr,
@@ -6113,6 +6114,8 @@ impl EditorWindow {
             return div().into_any_element();
         };
         let enabled = segment.enabled;
+        let replaces_mic = segment.replaces_mic;
+        let voice = segment.voice.clone();
         let name = segment
             .name
             .clone()
@@ -6275,7 +6278,194 @@ impl EditorWindow {
                 "s",
                 cx,
             ))
+            .child(
+                ui::Subfield::plain(&theme, tr::editor::panel::audio::replaces_mic()).child(
+                    ui::Toggle::plain(
+                        &theme,
+                        SharedString::from(format!("audio-replaces-mic-{index}")),
+                        replaces_mic,
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.edit_audio_segment(
+                            "audio-replaces-mic",
+                            index,
+                            window,
+                            cx,
+                            move |segment| {
+                                segment.replaces_mic = !replaces_mic;
+                                true
+                            },
+                        );
+                    })),
+                ),
+            )
+            .children(
+                (replaces_mic || voice.is_some()).then(|| self.render_take_voice(index, voice, cx)),
+            )
             .into_any_element()
+    }
+
+    fn render_take_voice(
+        &self,
+        index: usize,
+        voice: Option<TakeVoiceSettings>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = self.theme;
+        let matching = voice == Some(TakeVoiceSettings::MatchRecording);
+        let custom = match &voice {
+            Some(TakeVoiceSettings::Custom {
+                improve,
+                isolation,
+                stereo_mode,
+            }) => Some((*improve, *isolation, stereo_mode.clone())),
+            _ => None,
+        };
+        let hint = |text: &'static str| {
+            div()
+                .text_size(px(12.))
+                .line_height(px(16.))
+                .text_color(Hsla::from(theme.editor.text_3))
+                .child(text)
+                .into_any_element()
+        };
+
+        let mut section = div().flex().flex_col().gap(px(12.)).child(self.radio_row(
+            SharedString::from(format!("take-voice-{index}")),
+            vec![
+                (tr::editor::panel::audio::voice_match(), matching),
+                (tr::editor::panel::audio::voice_custom(), custom.is_some()),
+            ],
+            cx.listener(move |this, choice: &usize, window, cx| {
+                let next = if *choice == 0 {
+                    TakeVoiceSettings::MatchRecording
+                } else {
+                    TakeVoiceSettings::Custom {
+                        improve: this.project.audio.improve,
+                        isolation: this.project.audio.isolation,
+                        stereo_mode: this.project.audio.mic_stereo_mode.clone(),
+                    }
+                };
+                this.edit_audio_segment("take-voice", index, window, cx, move |segment| {
+                    if segment.voice.as_ref().map(std::mem::discriminant)
+                        == Some(std::mem::discriminant(&next))
+                    {
+                        return false;
+                    }
+                    segment.voice = Some(next);
+                    true
+                });
+            }),
+        ));
+
+        let Some((improve, isolation, stereo_mode)) = custom else {
+            let text = if matching {
+                tr::editor::panel::audio::voice_match_hint()
+            } else {
+                tr::editor::panel::audio::voice_none_hint()
+            };
+            return ui::Field::section(&theme, tr::editor::panel::audio::take_voice())
+                .child(section.child(hint(text)))
+                .into_any_element();
+        };
+
+        let isolations = [
+            (
+                VoiceIsolation::Light,
+                tr::editor::tabs::audio::isolation_light(),
+            ),
+            (
+                VoiceIsolation::Balanced,
+                tr::editor::tabs::audio::isolation_balanced(),
+            ),
+            (
+                VoiceIsolation::Strong,
+                tr::editor::tabs::audio::isolation_strong(),
+            ),
+        ];
+        section = section.child(
+            ui::Subfield::plain(&theme, "Studio Sound").child(
+                ui::Toggle::plain(
+                    &theme,
+                    SharedString::from(format!("take-improve-{index}")),
+                    improve,
+                )
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.edit_take_voice(index, window, cx, move |take_improve, _, _| {
+                        *take_improve = !improve;
+                    });
+                })),
+            ),
+        );
+        if improve {
+            section = section.child(
+                self.radio_row(
+                    SharedString::from(format!("take-isolation-{index}")),
+                    isolations
+                        .iter()
+                        .map(|(value, label)| (*label, *value == isolation))
+                        .collect(),
+                    cx.listener(move |this, choice: &usize, window, cx| {
+                        let Some(&(next, _)) = isolations.get(*choice) else {
+                            return;
+                        };
+                        this.edit_take_voice(index, window, cx, move |_, take_isolation, _| {
+                            *take_isolation = next;
+                        });
+                    }),
+                ),
+            );
+        }
+        ui::Field::section(&theme, tr::editor::panel::audio::take_voice())
+            .child(
+                section.child(
+                    ui::Subfield::plain(&theme, tr::editor::tabs::audio::stereo_mode()).child(
+                        self.radio_row(
+                            SharedString::from(format!("take-stereo-{index}")),
+                            STEREO_MODES
+                                .iter()
+                                .map(|(value, label)| (label(), *value == stereo_mode))
+                                .collect(),
+                            cx.listener(move |this, choice: &usize, window, cx| {
+                                let Some((next, _)) = STEREO_MODES.get(*choice) else {
+                                    return;
+                                };
+                                let next = next.clone();
+                                this.edit_take_voice(
+                                    index,
+                                    window,
+                                    cx,
+                                    move |_, _, take_stereo| {
+                                        *take_stereo = next;
+                                    },
+                                );
+                            }),
+                        ),
+                    ),
+                ),
+            )
+            .into_any_element()
+    }
+
+    fn edit_take_voice(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        change: impl FnOnce(&mut bool, &mut VoiceIsolation, &mut StereoMode),
+    ) {
+        self.edit_audio_segment("take-voice", index, window, cx, move |segment| {
+            let Some(TakeVoiceSettings::Custom {
+                improve,
+                isolation,
+                stereo_mode,
+            }) = segment.voice.as_mut()
+            else {
+                return false;
+            };
+            change(improve, isolation, stereo_mode);
+            true
+        });
     }
 
     /// `MaskSegmentConfig` (`:4342-4520`).

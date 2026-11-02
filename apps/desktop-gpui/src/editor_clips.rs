@@ -816,10 +816,14 @@ impl EditorWindow {
         }
 
         self.edit_project("clip-reorder", window, cx, move |project| {
-            project
-                .timeline
-                .as_mut()
-                .is_some_and(|timeline| move_clip(timeline, from, insertion))
+            project.timeline.as_mut().is_some_and(|timeline| {
+                let before = timeline.clone();
+                let moved = move_clip(timeline, from, insertion);
+                if moved {
+                    crate::editor_window::punch_in::keep_takes_on_their_lines(&before, timeline);
+                }
+                moved
+            })
         });
         self.set_selection(None, cx);
     }

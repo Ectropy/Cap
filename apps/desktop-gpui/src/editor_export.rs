@@ -631,6 +631,9 @@ impl EditorWindow {
     }
 
     pub(crate) fn open_export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.punch_in_active() {
+            return;
+        }
         if self.playing {
             self.toggle_play_from_crop(cx);
         }
