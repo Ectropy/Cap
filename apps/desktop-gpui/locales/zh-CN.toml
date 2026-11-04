@@ -210,6 +210,12 @@ label = "最大捕获帧率"
 description = "在 Studio 录制中添加标记时播放一段简短提示音。麦克风或系统音频可能会录入这段声音。"
 label = "添加标记时播放提示音"
 
+[settings.general.recording.punch_in_latency]
+description = "将新补录的片段提前这么多，使其与你听到的内容对齐。如果片段落点偏晚，请调大此值。"
+label = "补录延迟"
+milliseconds = "{ms} 毫秒"
+off = "关闭"
+
 [settings.general.storage]
 choose_folder = "选择文件夹"
 default_location = "默认（Application Support）"

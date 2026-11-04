@@ -210,6 +210,12 @@ label = "Velocidad de fotogramas máxima"
 description = "Reproduce un sonido corto cuando añades un marcador durante una grabación Studio. Tu micrófono o el audio del sistema pueden captarlo."
 label = "Reproducir un sonido con los marcadores"
 
+[settings.general.recording.punch_in_latency]
+description = "Adelanta las tomas regrabadas esta cantidad para que coincidan con lo que escuchaste. Si las tomas quedan tarde, auméntala."
+label = "Latencia de regrabación"
+milliseconds = "{ms} ms"
+off = "Desactivada"
+
 [settings.general.storage]
 choose_folder = "Elegir carpeta"
 default_location = "Predeterminada (Application Support)"
