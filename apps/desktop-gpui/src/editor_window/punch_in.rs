@@ -149,12 +149,13 @@ fn take_timeline_start(
     anchor: PlaybackClockAnchor,
     capture_start: Instant,
     first_sample_secs: f64,
+    latency_secs: f64,
 ) -> Option<f64> {
     let anchor_offset = anchor
         .instant
         .checked_duration_since(capture_start)?
         .as_secs_f64();
-    Some(anchor.timeline_secs + first_sample_secs - anchor_offset)
+    Some(anchor.timeline_secs + first_sample_secs - anchor_offset - latency_secs)
 }
 
 #[derive(Debug, PartialEq)]
@@ -306,6 +307,7 @@ async fn start_take(project_path: PathBuf, input: MicInput) -> Result<ActiveTake
 async fn finish_take(
     take: ActiveTake,
     instance: Option<Arc<EditorInstance>>,
+    latency_secs: f64,
 ) -> Result<FinishedTake, String> {
     let finished = take
         .pipeline
@@ -317,7 +319,14 @@ async fn finish_take(
         .signed_duration_since_secs(take.timestamps);
     let timeline_start = instance
         .and_then(|instance| instance.last_playback_clock_anchor())
-        .and_then(|anchor| take_timeline_start(anchor, take.timestamps.instant(), first_sample));
+        .and_then(|anchor| {
+            take_timeline_start(
+                anchor,
+                take.timestamps.instant(),
+                first_sample,
+                latency_secs,
+            )
+        });
     let captured = take.timestamps.instant().elapsed().as_secs_f64() - first_sample;
     let file = finished.path;
     let probed = tokio::task::spawn_blocking(move || probe_audio_duration(&file))
@@ -475,7 +484,8 @@ impl EditorWindow {
         self.punch_in.phase = PunchInPhase::Saving;
         self.punch_in_changed(cx);
         let instance = self.instance.clone();
-        let task = gpui_tokio::Tokio::spawn(cx, finish_take(take, instance));
+        let latency = crate::store::punch_in_latency_secs();
+        let task = gpui_tokio::Tokio::spawn(cx, finish_take(take, instance, latency));
         cx.spawn_in(window, async move |this, cx| {
             let finished = task.await.unwrap_or_else(|error| Err(error.to_string()));
             this.update_in(cx, |this, window, cx| {
@@ -719,8 +729,19 @@ mod tests {
             instant: capture_start + Duration::from_millis(500),
             timeline_secs: 2.0,
         };
-        let start = take_timeline_start(anchor, capture_start, 0.1).unwrap();
+        let start = take_timeline_start(anchor, capture_start, 0.1, 0.0).unwrap();
         assert!((start - 1.6).abs() < 1e-9);
+    }
+
+    #[test]
+    fn the_latency_setting_moves_the_take_earlier() {
+        let capture_start = Instant::now();
+        let anchor = PlaybackClockAnchor {
+            instant: capture_start + Duration::from_millis(500),
+            timeline_secs: 2.0,
+        };
+        let start = take_timeline_start(anchor, capture_start, 0.1, 0.04).unwrap();
+        assert!((start - 1.56).abs() < 1e-9);
     }
 
     #[test]
@@ -730,7 +751,7 @@ mod tests {
             instant: Instant::now(),
             timeline_secs: 2.0,
         };
-        assert_eq!(take_timeline_start(anchor, capture_start, 0.1), None);
+        assert_eq!(take_timeline_start(anchor, capture_start, 0.1, 0.0), None);
     }
 
     #[test]

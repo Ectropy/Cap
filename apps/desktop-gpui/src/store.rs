@@ -1167,6 +1167,7 @@ pub struct GeneralSettings {
     /// GPUI-only `keepDrawingsOnScreen`: strokes drawn on screen while
     /// recording stay until cleared instead of fading out.
     pub keep_drawings: bool,
+    pub punch_in_latency_ms: u32,
     pub max_fps: u32,
     pub recordings_path: Option<String>,
     /// Custom folders the library has been pointed at before. Not rendered by
@@ -1212,6 +1213,19 @@ pub const EDITOR_PREVIEW_ENHANCE_KEY: &str = "editorPreviewEnhance";
 
 pub const RECORDING_MARKER_SOUND_KEY: &str = "recordingMarkerSound";
 pub const KEEP_DRAWINGS_KEY: &str = "keepDrawingsOnScreen";
+
+pub const PUNCH_IN_LATENCY_KEY: &str = "punchInLatencyMs";
+
+pub fn punch_in_latency_secs() -> f64 {
+    cached_store(&tauri_store_path())
+        .and_then(|store| {
+            store
+                .get(GENERAL_SETTINGS)
+                .and_then(Value::as_object)
+                .map(|settings| u32_at(settings, PUNCH_IN_LATENCY_KEY, 0))
+        })
+        .map_or(0.0, |ms| f64::from(ms) / 1000.0)
+}
 
 /// Read on every marker press, so it goes through the cached store rather
 /// than a full [`GeneralSettings::load`].
@@ -1638,6 +1652,7 @@ impl GeneralSettings {
             macbook_notch_overlay: bool_at(general, "macbookNotchOverlay", false),
             recording_marker_sound: bool_at(general, RECORDING_MARKER_SOUND_KEY, false),
             keep_drawings: bool_at(general, KEEP_DRAWINGS_KEY, false),
+            punch_in_latency_ms: u32_at(general, PUNCH_IN_LATENCY_KEY, 0),
             max_fps: u32_at(general, "maxFps", 60),
             recordings_path: opt_string_at(general, "recordingsPath"),
             previous_recordings_paths: strings_at(general, "previousRecordingsPaths"),
