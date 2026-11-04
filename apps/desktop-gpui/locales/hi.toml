@@ -210,6 +210,12 @@ label = "अधिकतम कैप्चर फ़्रेम रेट"
 description = "Studio रिकॉर्डिंग के दौरान मार्कर जोड़ने पर एक छोटी आवाज़ चलाता है। आपका माइक्रोफ़ोन या सिस्टम ऑडियो इसे रिकॉर्ड कर सकता है।"
 label = "मार्कर के लिए आवाज़ चलाएँ"
 
+[settings.general.recording.punch_in_latency]
+description = "नए दोबारा रिकॉर्ड किए गए टेक को इतना पहले खिसकाता है ताकि वे आपकी सुनी हुई आवाज़ से मेल खाएँ। अगर टेक देर से आते हैं, तो इसे बढ़ाएँ।"
+label = "पंच-इन लेटेंसी"
+milliseconds = "{ms} ms"
+off = "बंद"
+
 [settings.general.storage]
 choose_folder = "फ़ोल्डर चुनें"
 default_location = "डिफ़ॉल्ट (Application Support)"

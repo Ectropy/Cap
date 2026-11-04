@@ -304,6 +304,20 @@ fn english_matches_the_literals_it_replaced() {
                 .into(),
         ),
         (
+            tr::settings::general::recording::punch_in_latency::label(),
+            "Punch-in latency".into(),
+        ),
+        (
+            tr::settings::general::recording::punch_in_latency::description(),
+            "Moves new re-recorded takes earlier by this much so they line up with what \
+                             you heard. If takes land late, raise it."
+                .into(),
+        ),
+        (
+            tr::settings::general::recording::punch_in_latency::off(),
+            "Off".into(),
+        ),
+        (
             tr::settings::general::recording::max_fps::description(),
             "Maximum framerate for screen capture.".into(),
         ),
@@ -517,8 +531,9 @@ fn english_matches_the_literals_it_replaced() {
         })
         .count()
         // `tray.version`, `excluded_windows.missing_body`, `self_host.confirm_change`,
-        // `menu.update.badge_progress` and `menu.update.badge_version` take arguments.
-        - 5;
+        // `menu.update.badge_progress`, `menu.update.badge_version` and
+        // `recording.punch_in_latency.milliseconds` take arguments.
+        - 6;
     assert_eq!(
         pairs.len(),
         plain_keys,

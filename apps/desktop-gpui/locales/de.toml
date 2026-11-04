@@ -210,6 +210,12 @@ label = "Maximale Bildrate"
 description = "Spielt einen kurzen Ton ab, wenn Sie während einer Studio-Aufnahme einen Marker hinzufügen. Ihr Mikrofon oder der Systemton kann ihn mit aufnehmen."
 label = "Ton für Marker abspielen"
 
+[settings.general.recording.punch_in_latency]
+description = "Verschiebt neu aufgenommene Takes um diesen Wert nach vorn, damit sie zu dem passen, was Sie gehört haben. Landen Takes zu spät, erhöhen Sie den Wert."
+label = "Punch-in-Latenz"
+milliseconds = "{ms} ms"
+off = "Aus"
+
 [settings.general.storage]
 choose_folder = "Ordner wählen"
 default_location = "Standard (Application Support)"

@@ -210,6 +210,12 @@ label = "最大キャプチャフレームレート"
 description = "Studio録画中にマーカーを追加すると短い音を鳴らします。マイクやシステムオーディオに録音される場合があります。"
 label = "マーカー追加時に音を鳴らす"
 
+[settings.general.recording.punch_in_latency]
+description = "再録音したテイクをこの分だけ前にずらし、聞こえていた音に合わせます。テイクが遅れて配置される場合は値を上げてください。"
+label = "パンチインのレイテンシー"
+milliseconds = "{ms} ms"
+off = "オフ"
+
 [settings.general.storage]
 choose_folder = "フォルダを選択"
 default_location = "デフォルト（Application Support）"

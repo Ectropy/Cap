@@ -212,6 +212,12 @@ label = "Max capture framerate"
 description = "Plays a short sound when you add a marker during a Studio recording. Your microphone or system audio can pick it up."
 label = "Play a sound for markers"
 
+[settings.general.recording.punch_in_latency]
+description = "Moves new re-recorded takes earlier by this much so they line up with what you heard. If takes land late, raise it."
+label = "Punch-in latency"
+milliseconds = { text = "{ms} ms", context = "A latency option in the settings select. {ms} is a whole number of milliseconds.", max_px = 180, size = 12 }
+off = { text = "Off", max_px = 180, size = 12 }
+
 [settings.general.storage]
 choose_folder = "Choose Folder"
 default_location = { text = "Default (Application Support)", context = "Shown in place of a folder path when recordings use the default location." }

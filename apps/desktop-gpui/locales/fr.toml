@@ -210,6 +210,12 @@ label = "Fréquence d'images maximale"
 description = "Émet un son bref lorsque vous ajoutez un repère pendant un enregistrement Studio. Votre micro ou le son du système peuvent l'enregistrer."
 label = "Émettre un son pour les repères"
 
+[settings.general.recording.punch_in_latency]
+description = "Avance les nouvelles prises réenregistrées de cette durée pour qu'elles correspondent à ce que vous avez entendu. Si les prises arrivent en retard, augmentez-la."
+label = "Latence de réenregistrement"
+milliseconds = "{ms} ms"
+off = "Désactivée"
+
 [settings.general.storage]
 choose_folder = "Choisir un dossier"
 default_location = "Par défaut (Application Support)"
