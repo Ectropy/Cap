@@ -6302,27 +6302,31 @@ impl EditorWindow {
                 "s",
                 cx,
             ))
-            .child(
-                ui::Subfield::plain(&theme, tr::editor::panel::audio::replaces_mic()).child(
-                    ui::Toggle::plain(
-                        &theme,
-                        SharedString::from(format!("audio-replaces-mic-{index}")),
-                        replaces_mic,
-                    )
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.edit_audio_segment(
-                            "audio-replaces-mic",
-                            index,
-                            window,
-                            cx,
-                            move |segment| {
-                                segment.replaces_mic = !replaces_mic;
-                                true
+            .children((replaces_mic || voice.is_some()).then(|| {
+                ui::Subfield::plain(&theme, tr::editor::panel::audio::replaces_mic())
+                    .child(
+                        ui::Toggle::plain(
+                            &theme,
+                            SharedString::from(format!("audio-replaces-mic-{index}")),
+                            replaces_mic,
+                        )
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                this.edit_audio_segment(
+                                    "audio-replaces-mic",
+                                    index,
+                                    window,
+                                    cx,
+                                    move |segment| {
+                                        segment.replaces_mic = !replaces_mic;
+                                        true
+                                    },
+                                );
                             },
-                        );
-                    })),
-                ),
-            )
+                        )),
+                    )
+                    .into_any_element()
+            }))
             .children(
                 (replaces_mic || voice.is_some()).then(|| self.render_take_voice(index, voice, cx)),
             )
