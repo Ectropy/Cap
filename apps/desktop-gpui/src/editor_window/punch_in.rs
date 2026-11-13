@@ -259,6 +259,41 @@ pub(crate) fn keep_takes_on_their_lines(
     }
 }
 
+pub(super) fn ride_takes_with_clips(
+    audio: &mut [timeline::Segment],
+    takes: &[AudioTrackSegment],
+    clips: &[timeline::Segment],
+    shown: &[(f64, f64)],
+    held_by_end: Option<usize>,
+) {
+    let shifts = clips
+        .iter()
+        .zip(shown)
+        .enumerate()
+        .map(|(index, (clip, (start, end)))| {
+            let shift = if held_by_end == Some(index) {
+                end - clip.end
+            } else {
+                start - clip.start
+            };
+            (clip.start..clip.end, shift)
+        })
+        .collect::<Vec<_>>();
+    for (segment, take) in audio.iter_mut().zip(takes) {
+        if !take.replaces_mic {
+            continue;
+        }
+        let Some((_, shift)) = shifts
+            .iter()
+            .find(|(range, _)| range.contains(&segment.start))
+        else {
+            continue;
+        };
+        segment.start += shift;
+        segment.end += shift;
+    }
+}
+
 async fn open_mic(
     input: MicInput,
 ) -> Result<
@@ -872,6 +907,42 @@ mod tests {
         after.segments[0].start = 1.0;
         keep_takes_on_their_lines(&before, &mut after);
         assert!((after.audio_segments[1].start - 5.0).abs() < 1e-9);
+    }
+
+    fn drawn(start: f64, end: f64) -> timeline::Segment {
+        timeline::Segment {
+            start,
+            end,
+            lane: 0,
+            detail: timeline::SegmentDetail::Caption { text: "".into() },
+        }
+    }
+
+    #[test]
+    fn takes_are_drawn_with_the_clip_box_they_start_in() {
+        let clips = [drawn(0.0, 4.0), drawn(4.0, 10.0)];
+        let mut music = take(5.0, 6.0);
+        music.replaces_mic = false;
+        let takes = [take(1.0, 2.0), take(5.0, 6.0), music];
+        let mut audio = takes
+            .iter()
+            .map(|take| drawn(take.start, take.end))
+            .collect::<Vec<_>>();
+        ride_takes_with_clips(&mut audio, &takes, &clips, &[(0.0, 4.0), (5.5, 11.5)], None);
+        assert_eq!((audio[0].start, audio[0].end), (1.0, 2.0));
+        assert_eq!((audio[1].start, audio[1].end), (6.5, 7.5));
+        assert_eq!(audio[2].start, 5.0);
+    }
+
+    #[test]
+    fn a_start_edge_drag_moves_takes_with_the_clip_end() {
+        let clips = [drawn(0.0, 4.0)];
+        let takes = [take(1.0, 2.0)];
+        let mut audio = vec![drawn(1.0, 2.0)];
+        ride_takes_with_clips(&mut audio, &takes, &clips, &[(0.0, 5.0)], Some(0));
+        assert_eq!(audio[0].start, 2.0);
+        ride_takes_with_clips(&mut audio, &takes, &clips, &[(1.0, 4.0)], Some(0));
+        assert_eq!(audio[0].start, 2.0);
     }
 
     #[test]

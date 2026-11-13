@@ -6317,6 +6317,7 @@ impl EditorWindow {
                 clip.start = *start;
                 clip.end = *end;
             }
+            self.ride_takes(&mut model, &boxes, draft.start_edge.then_some(draft.index));
             if let Some(clip) = model.clips.get_mut(draft.index)
                 && let timeline::SegmentDetail::Clip {
                     source_start,
@@ -6346,7 +6347,30 @@ impl EditorWindow {
             clip.start = from_start + (clip.start - from_start) * eased;
             clip.end = from_end + (clip.end - from_end) * eased;
         }
+        let shown = model
+            .clips
+            .iter()
+            .map(|clip| (clip.start, clip.end))
+            .collect::<Vec<_>>();
+        self.ride_takes(&mut model, &shown, None);
         Some(model)
+    }
+
+    fn ride_takes(
+        &self,
+        model: &mut timeline::TimelineModel,
+        shown: &[(f64, f64)],
+        held_by_end: Option<usize>,
+    ) {
+        if let Some(project) = self.project.timeline.as_ref() {
+            punch_in::ride_takes_with_clips(
+                &mut model.audio,
+                &project.audio_segments,
+                &self.timeline.clips,
+                shown,
+                held_by_end,
+            );
+        }
     }
 
     /// Commit the ghost draft once, then glide every box from where the drag
