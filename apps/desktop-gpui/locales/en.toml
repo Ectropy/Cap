@@ -216,12 +216,6 @@ label = "Keep drawings on screen"
 description = "Plays a short sound when you add a marker during a Studio recording. Your microphone or system audio can pick it up."
 label = "Play a sound for markers"
 
-[settings.general.recording.punch_in_latency]
-description = "Moves new re-recorded takes earlier by this much so they line up with what you heard. If takes land late, raise it."
-label = "Punch-in latency"
-milliseconds = { text = "{ms} ms", context = "A latency option in the settings select. {ms} is a whole number of milliseconds.", max_px = 180, size = 12 }
-off = { text = "Off", max_px = 180, size = 12 }
-
 [settings.general.storage]
 choose_folder = "Choose Folder"
 default_location = { text = "Default (Application Support)", context = "Shown in place of a folder path when recordings use the default location." }
@@ -3371,20 +3365,39 @@ save_failed = "Could not save the recording title for {path}: {error}"
 
 [editor.window.punch_in]
 button = "Re-record"
+cancel = "Cancel"
+clear = "Clear"
+count_in = "Get ready"
+discard = "Discard"
+elapsed = { text = "{time} recorded", context = "{time} is a duration such as 0:04." }
+export_blocked = "Finish the take before exporting"
+hint = "Recording starts at In after a 3 second count-in. Drag the marks on the timeline to adjust."
+latency = "Latency offset"
+latency_description = "Moves new takes earlier by this much so they line up with what you heard. If takes land late, raise it."
+latency_ms = { text = "{ms} ms", context = "A latency option in a select. {ms} is a whole number of milliseconds.", max_px = 180, size = 12 }
+latency_off = { text = "Off", max_px = 180, size = 12 }
 mark_in = "In"
 mark_out = "Out"
-no_microphone = "Choose a microphone in Cap's main window first"
+microphone = "Microphone"
+no_microphone = "No microphone"
+record = "Record"
+recording = "Recording"
 recording_active = "Finish the current recording before recording a take"
+remaining = { text = "{time} left", context = "{time} is a duration such as 0:04." }
 save_failed = { text = "Could not save the take: {error}", context = "{error} is a technical message that stays in English." }
 saving = "Saving…"
+set_to_playhead = "Set to playhead"
 start_failed = { text = "Could not record a take: {error}", context = "{error} is a technical message that stays in English." }
 starting = "Starting…"
 stop = "Stop"
-stopped_early = "Stopped before the punch-in point, so no take was kept"
+stopped_early = "Stopped before the In point, so no take was kept"
 take_name = "Voiceover take"
-tooltip_from = "Re-record voiceover from {time}"
-tooltip_range = "Re-record voiceover {start}–{end}"
+title = "Re-record voiceover"
+tooltip_arm = "Re-record voiceover"
+tooltip_armed = "Set In and Out at the playhead. Esc cancels."
+tooltip_record = "Start the take"
 tooltip_stop = "Stop take. Esc to discard."
+until_stop = "Until you stop"
 
 [editor.window.track]
 clear_all = "Clear all"

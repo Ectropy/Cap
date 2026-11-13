@@ -1377,6 +1377,14 @@ impl Feeds {
     /// chosen -- so neither does this: only the hardware is released.
     pub fn release_inputs(&mut self, cx: &mut Context<Self>) {
         self.park_camera_preview(cx);
+        self.release_microphone(cx);
+    }
+
+    pub fn mic_input_released(&self) -> bool {
+        self.mic_input_released
+    }
+
+    pub fn release_microphone(&mut self, cx: &mut Context<Self>) {
         self.mic_epoch += 1;
         self.mic_input_epoch
             .store(self.mic_epoch, Ordering::Release);

@@ -2215,6 +2215,7 @@ impl EditorWindow {
                     if let Some(reason) = editor.busy_reason() {
                         return Some(reason.to_string());
                     }
+                    editor.disarm_punch_in(cx);
                     editor.flush_pending_saves(cx).err()
                 })
             });
@@ -3044,6 +3045,7 @@ impl EditorWindow {
         }
         self.publish_project();
         self.schedule_save(window, cx);
+        self.sync_punch_in_to_project(cx);
         cx.notify();
         window.refresh();
     }
@@ -3056,6 +3058,7 @@ impl EditorWindow {
         self.history.record(&self.project);
         self.transcript.dirty = true;
         self.publish_project();
+        self.sync_punch_in_to_project(cx);
         cx.notify();
     }
 
@@ -3114,6 +3117,7 @@ impl EditorWindow {
         }
         self.publish_project();
         self.schedule_save(window, cx);
+        self.sync_punch_in_to_project(cx);
         cx.notify();
         window.refresh();
     }
@@ -3308,6 +3312,7 @@ impl EditorWindow {
                 self.selection = None;
             }
         }
+        self.sync_punch_in_to_project(cx);
         cx.notify();
         window.refresh();
     }
@@ -4259,6 +4264,21 @@ impl EditorWindow {
             }
             return;
         }
+        if self.punch_in.is_armed()
+            && is_record_take_shortcut(
+                &event.keystroke,
+                ui::text_input_has_focus(window, cx),
+                self.sidebar.menu.is_some() || self.toolbar_menu.is_some(),
+            )
+        {
+            window.prevent_default();
+            cx.stop_propagation();
+            if !event.is_held {
+                self.start_punch_in(window, cx);
+                window.refresh();
+            }
+            return;
+        }
         if !is_playback_shortcut(
             &event.keystroke,
             ui::text_input_has_focus(window, cx),
@@ -4322,8 +4342,10 @@ impl EditorWindow {
             }
         }
 
-        if self.punch_in.is_recording() && event.keystroke.key == "escape" && !event.is_held {
-            self.cancel_punch_in(cx);
+        if self.punch_in.is_active() && event.keystroke.key == "escape" {
+            if !event.is_held {
+                self.cancel_punch_in(cx);
+            }
             cx.stop_propagation();
             return;
         }
@@ -4664,7 +4686,8 @@ impl EditorWindow {
                 } else {
                     punch_in::PunchMark::Out
                 };
-                self.set_punch_mark(mark, cx);
+                self.punch_in_key(mark, window, cx);
+                window.refresh();
             }
             "escape" => {
                 cx.stop_propagation();
@@ -4686,6 +4709,11 @@ impl EditorWindow {
                     return;
                 }
                 if self.marker_escape(window, cx) {
+                    window.refresh();
+                    return;
+                }
+                if self.punch_in.is_armed() {
+                    self.disarm_punch_in(cx);
                     window.refresh();
                     return;
                 }
@@ -4858,6 +4886,7 @@ impl EditorWindow {
         if !self.playing {
             cx.notify();
         }
+        self.refresh_punch_in_display(cx);
     }
 
     fn emit_preview_frame(&self) {
@@ -6310,6 +6339,16 @@ impl EditorWindow {
     /// clone with the clip boxes replaced by the ghost layout (mid-drag) or
     /// the release animation's eased positions.
     fn display_timeline_model(&self) -> Option<timeline::TimelineModel> {
+        let model = self.edited_timeline_model();
+        let Some(take) = self.live_take() else {
+            return model;
+        };
+        let mut model = model.unwrap_or_else(|| self.timeline.clone());
+        model.audio.push(take);
+        Some(model)
+    }
+
+    fn edited_timeline_model(&self) -> Option<timeline::TimelineModel> {
         if let Some(draft) = self.clip_draft {
             let (boxes, gap) = self.ghost_clip_boxes()?;
             let mut model = self.timeline.clone();
@@ -8528,7 +8567,7 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if speed == self.preview_speed {
+        if speed == self.preview_speed || self.punch_in.is_active() {
             return;
         }
         self.preview_speed = speed;
@@ -8589,6 +8628,9 @@ impl EditorWindow {
     }
 
     fn step_preview_speed(&mut self, faster: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.punch_in.is_active() {
+            return;
+        }
         let next = if faster {
             self.preview_speed.faster()
         } else {
@@ -12068,6 +12110,7 @@ impl EditorWindow {
             } else {
                 None
             })
+            .children(self.render_punch_in_overlay())
     }
 
     /// `EditorErrorScreen` -- what a bundle that will not open shows instead of
@@ -12206,6 +12249,7 @@ impl EditorWindow {
             "icons/pause.svg"
         };
 
+        let taking = self.punch_in.is_active();
         let skip = |id: &'static str, glyph: &'static str, handler: ui::ClickHandler| {
             div()
                 .id(id)
@@ -12214,16 +12258,17 @@ impl EditorWindow {
                 .items_center()
                 .justify_center()
                 .size(px(24.))
-                .when(live, |this| {
+                .when(live && !taking, |this| {
                     this.cursor_pointer().hover(|style| style.opacity(0.7))
                 })
+                .when(taking, |this| this.opacity(0.4))
+                .when(!taking, |this| this.on_click(handler))
                 .child(
                     svg()
                         .path(glyph)
                         .size(px(14.))
                         .text_color(Hsla::from(editor.text_2)),
                 )
-                .on_click(handler)
         };
 
         div()
@@ -12346,7 +12391,7 @@ impl EditorWindow {
                     .items_center()
                     .child(self.render_markers_button(compact, cx))
                     .child(self.header_divider())
-                    .child(self.render_punch_in_button(narrow, cx))
+                    .child(self.render_punch_in_button(compact, cx))
                     // The split toggle (`Player.tsx:409-427`).
                     .child(
                         div()
@@ -12378,7 +12423,7 @@ impl EditorWindow {
                                     tr::editor::window::transport::split()
                                 })
                                 .radius(px(7.))
-                                .disabled(!self.project_ready())
+                                .disabled(!self.project_ready() || taking)
                                 .on_click(cx.listener(
                                     |this, _, window, cx| {
                                         this.toggle_split_mode(cx);
@@ -12522,7 +12567,7 @@ impl EditorWindow {
     fn render_preview_speed(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let editor = theme.editor;
-        let enabled = self.visual_ready();
+        let enabled = self.visual_ready() && !self.punch_in.is_active();
         let open = self
             .toolbar_menu
             .as_ref()
@@ -12582,42 +12627,6 @@ impl EditorWindow {
         } else {
             trigger
         }
-    }
-
-    fn render_punch_in_button(&self, narrow: bool, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = self.theme;
-        let tooltip = SharedString::from(self.punch_in_tooltip());
-        let recording = self.punch_in.is_recording();
-        let keys: &'static [&'static str] = if recording { &["Space"] } else { &["I", "O"] };
-        let label = (!narrow || self.punch_in.is_active()).then(|| self.punch_in_label());
-        div()
-            .id("transport-punch-in-tooltip")
-            .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
-            .tooltip(move |_, cx| {
-                ui::Tooltip::new(&theme, tooltip.clone())
-                    .keys(keys.iter().copied())
-                    .view(cx)
-            })
-            .child(
-                ui::Button::plain(
-                    &theme,
-                    "transport-punch-in",
-                    if self.punch_in.is_active() {
-                        ui::ButtonVariant::Destructive
-                    } else {
-                        ui::ButtonVariant::Gray
-                    },
-                    ui::ButtonSize::Sm,
-                )
-                .icon("icons/microphone.svg")
-                .when_some(label, |button, label| button.label(label))
-                .radius(px(7.))
-                .disabled(!self.project_ready() || self.punch_in.is_transitioning())
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.toggle_punch_in(window, cx);
-                    window.refresh();
-                })),
-            )
     }
 
     // -- Timeline ------------------------------------------------------------
@@ -12799,13 +12808,7 @@ impl EditorWindow {
             // column.
             .children(ghost_x.map(|x| timeline::render_preview_line(&theme, x)))
             .children(self.render_marker_lines(viewport_width))
-            .children(timeline::render_punch_marks(
-                &theme,
-                self.view,
-                content_width,
-                self.punch_in.marks.start,
-                self.punch_in.marks.end,
-            ))
+            .children(self.render_punch_marks(content_width, cx))
             // The playhead (`:1279-1295`). It dims to 50 % in split
             // mode, where the cut line is the thing to watch
             // (`TL/index.tsx:1281`).
@@ -13664,7 +13667,9 @@ fn dismiss_indexed_sidebar_menu(menu: &mut Option<crate::editor_tabs::OpenMenu>)
         | SidebarMenu::CaptionWeight
         | SidebarMenu::KeyboardFont
         | SidebarMenu::KeyboardPosition
-        | SidebarMenu::KeyboardWeight => false,
+        | SidebarMenu::KeyboardWeight
+        | SidebarMenu::PunchInMicrophone
+        | SidebarMenu::PunchInLatency => false,
     });
     if indexed {
         *menu = None;
@@ -13677,6 +13682,22 @@ fn is_playback_shortcut(
     menu_open: bool,
 ) -> bool {
     keystroke.key == "space" && !keystroke.modifiers.modified() && !text_input_focused && !menu_open
+}
+
+fn is_record_take_shortcut(
+    keystroke: &gpui::Keystroke,
+    text_input_focused: bool,
+    menu_open: bool,
+) -> bool {
+    let modifiers = keystroke.modifiers;
+    keystroke.key == "space"
+        && modifiers.shift
+        && !modifiers.platform
+        && !modifiers.control
+        && !modifiers.alt
+        && !modifiers.function
+        && !text_input_focused
+        && !menu_open
 }
 
 impl Render for EditorWindow {
@@ -13836,6 +13857,7 @@ impl Render for EditorWindow {
                                         && this.lane_reorder.is_none()
                                         && this.minimap_drag.is_none()
                                         && this.markers.drag.is_none()
+                                        && !this.punch_in.is_dragging()
                                     {
                                         return;
                                     }
@@ -13845,6 +13867,7 @@ impl Render for EditorWindow {
                                         // app, a system gesture): settle the
                                         // drag at its last state.
                                         this.marker_drag_up(window, cx);
+                                        this.punch_drag_up(cx);
                                         this.window_mouse_up(cx);
                                         this.drag_mouse_up(window, cx);
                                         this.cancel_lane_reorder(cx);
@@ -13859,6 +13882,14 @@ impl Render for EditorWindow {
                                     }
                                     if this.markers.drag.is_some() {
                                         this.marker_drag_move(
+                                            f32::from(event.position.x),
+                                            window,
+                                            cx,
+                                        );
+                                        return;
+                                    }
+                                    if this.punch_in.is_dragging() {
+                                        this.punch_drag_move(
                                             f32::from(event.position.x),
                                             window,
                                             cx,
@@ -13898,10 +13929,12 @@ impl Render for EditorWindow {
                                         && this.lane_reorder.is_none()
                                         && this.minimap_drag.is_none()
                                         && this.markers.drag.is_none()
+                                        && !this.punch_in.is_dragging()
                                     {
                                         return;
                                     }
                                     this.marker_drag_up(window, cx);
+                                    this.punch_drag_up(cx);
                                     this.window_mouse_up(cx);
                                     this.drag_mouse_up(window, cx);
                                     this.finish_lane_reorder(window, cx);
@@ -16554,6 +16587,18 @@ mod tests {
         ] {
             let keystroke = gpui::Keystroke::parse(key).unwrap();
             assert!(!is_playback_shortcut(&keystroke, false, false), "{key}");
+        }
+    }
+
+    #[test]
+    fn shift_space_records_a_take_outside_text_fields_and_menus() {
+        let shift_space = gpui::Keystroke::parse("shift-space").unwrap();
+        assert!(is_record_take_shortcut(&shift_space, false, false));
+        assert!(!is_record_take_shortcut(&shift_space, true, false));
+        assert!(!is_record_take_shortcut(&shift_space, false, true));
+        for key in ["space", "shift-r", "cmd-shift-space", "ctrl-shift-space"] {
+            let keystroke = gpui::Keystroke::parse(key).unwrap();
+            assert!(!is_record_take_shortcut(&keystroke, false, false), "{key}");
         }
     }
 

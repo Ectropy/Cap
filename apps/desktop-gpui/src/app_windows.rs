@@ -1105,6 +1105,11 @@ pub fn hide_main_for_meeting_window(cx: &mut App) {
     }
 }
 
+pub(crate) fn main_window_parked(cx: &App) -> bool {
+    cx.try_global::<AppWindows>()
+        .is_some_and(|windows| windows.main_hidden_by_app || windows.main_closed_by_user)
+}
+
 /// `getCurrentWindow().hide()` -- same rule, same reason.
 pub fn hide_main_window(cx: &mut App) {
     cx.global_mut::<AppWindows>().main_hidden_by_app = true;

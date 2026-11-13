@@ -200,7 +200,6 @@ impl Page {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MenuKind {
     Countdown,
-    PunchInLatency,
     MainWindowStart,
     WindowCapture,
     PostDeletion,
@@ -252,16 +251,6 @@ const COUNTDOWN_OPTIONS: &[(u32, fn() -> &'static str)] = &[
     (5, tr::settings::general::recording::countdown::seconds_5),
     (10, tr::settings::general::recording::countdown::seconds_10),
 ];
-
-const PUNCH_IN_LATENCY_OPTIONS: &[u32] = &[0, 10, 20, 30, 40, 50, 60, 80, 100, 150, 200];
-
-fn punch_in_latency_label(ms: u32) -> String {
-    if ms == 0 {
-        tr::settings::general::recording::punch_in_latency::off().to_string()
-    } else {
-        tr::settings::general::recording::punch_in_latency::milliseconds(ms).to_string()
-    }
-}
 
 type Label = fn() -> &'static str;
 
@@ -1580,15 +1569,6 @@ impl SettingsWindow {
                     .map(|(value, label)| ui::MenuItem::new(label(), *value == current))
                     .collect()
             }
-            MenuKind::PunchInLatency => PUNCH_IN_LATENCY_OPTIONS
-                .iter()
-                .map(|ms| {
-                    ui::MenuItem::new(
-                        punch_in_latency_label(*ms),
-                        *ms == self.settings.punch_in_latency_ms,
-                    )
-                })
-                .collect(),
             MenuKind::MaxFps => MAX_FPS_OPTIONS
                 .iter()
                 .map(|(value, label)| ui::MenuItem::new(label(), *value == self.settings.max_fps))
@@ -1627,12 +1607,6 @@ impl SettingsWindow {
                 if let Some((value, _)) = COUNTDOWN_OPTIONS.get(index) {
                     self.settings.recording_countdown = Some(*value);
                     self.write_u32("recordingCountdown", *value, cx);
-                }
-            }
-            MenuKind::PunchInLatency => {
-                if let Some(ms) = PUNCH_IN_LATENCY_OPTIONS.get(index) {
-                    self.settings.punch_in_latency_ms = *ms;
-                    self.write_u32(store::PUNCH_IN_LATENCY_KEY, *ms, cx);
                 }
             }
             MenuKind::MaxFps => {
@@ -3981,17 +3955,6 @@ impl SettingsWindow {
                                 let value = this.settings.recording_marker_sound;
                                 this.write_bool(store::RECORDING_MARKER_SOUND_KEY, value, cx);
                             },
-                        )
-                        .into_any_element(),
-                    ),
-                    self.setting_row(
-                        tr::settings::general::recording::punch_in_latency::label(),
-                        Some(tr::settings::general::recording::punch_in_latency::description()),
-                        self.select(
-                            "punch-in-latency",
-                            punch_in_latency_label(settings.punch_in_latency_ms),
-                            MenuKind::PunchInLatency,
-                            cx,
                         )
                         .into_any_element(),
                     ),

@@ -812,6 +812,8 @@ pub enum SidebarMenu {
     TextFontFamily(usize),
     TextWeight(usize),
     Camera3DEasing(usize),
+    PunchInMicrophone,
+    PunchInLatency,
 }
 
 pub struct OpenMenu {
@@ -927,6 +929,9 @@ impl EditorWindow {
             SidebarMenu::TextFontFamily(index)
             | SidebarMenu::TextWeight(index)
             | SidebarMenu::Camera3DEasing(index) => self.panel_menu_items(kind, index),
+            SidebarMenu::PunchInMicrophone | SidebarMenu::PunchInLatency => {
+                self.punch_in_menu_items(kind)
+            }
         }
     }
 
@@ -1189,6 +1194,9 @@ impl EditorWindow {
             | SidebarMenu::TextWeight(segment)
             | SidebarMenu::Camera3DEasing(segment) => {
                 self.choose_panel_menu(kind, segment, index, window, cx)
+            }
+            SidebarMenu::PunchInMicrophone | SidebarMenu::PunchInLatency => {
+                self.choose_punch_in_menu(kind, index, cx)
             }
         }
     }

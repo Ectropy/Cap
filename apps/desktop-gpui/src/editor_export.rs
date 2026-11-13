@@ -972,6 +972,7 @@ impl EditorWindow {
 
     pub(crate) fn open_export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.punch_in_active() {
+            self.show_notice(tr::editor::window::punch_in::export_blocked(), window, cx);
             return;
         }
         if self.playing {

@@ -1306,6 +1306,8 @@ pub enum SegmentDetail {
         path: SharedString,
         trim_start: f64,
         volume_db: f64,
+        replaces_mic: bool,
+        live: bool,
     },
     /// `TL/CaptionsTrack.tsx:176-273`.
     Caption {
@@ -1542,6 +1544,8 @@ impl TimelineModel {
                     path: SharedString::from(segment.path.clone()),
                     trim_start: segment.trim_start,
                     volume_db: f64::from(segment.volume_db),
+                    replaces_mic: segment.replaces_mic,
+                    live: false,
                 },
             })
             .collect();
@@ -2820,10 +2824,10 @@ fn render_segment(
     split_mode: bool,
     camera3d_editing_end: bool,
 ) -> AnyElement {
-    let color = if matches!(segment.detail, SegmentDetail::Clip { muted: true, .. }) {
-        muted_clip_color(theme)
-    } else {
-        kind.color()
+    let color = match segment.detail {
+        SegmentDetail::Clip { muted: true, .. } => muted_clip_color(theme),
+        SegmentDetail::Audio { live: true, .. } => Hsla::from(theme.red_9),
+        _ => kind.color(),
     };
     let x = ((segment.start - view.transform.position) / secs_per_pixel) as f32;
     let width = ((segment.end - segment.start) / secs_per_pixel) as f32;
@@ -3693,6 +3697,31 @@ fn label_secondary(theme: &Theme, color: Hsla) -> gpui::Div {
         .text_color(seg_muted(theme, color))
 }
 
+fn audio_name(
+    theme: &Theme,
+    color: Hsla,
+    detail: &SegmentDetail,
+    name: &SharedString,
+) -> gpui::Div {
+    let replaces_mic = matches!(
+        detail,
+        SegmentDetail::Audio {
+            replaces_mic: true,
+            ..
+        }
+    );
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(4.))
+        .min_w_0()
+        .when(replaces_mic, |row| {
+            row.child(label_glyph(theme, color, "icons/microphone.svg", 11.))
+        })
+        .child(label_primary(theme, color).child(name.clone()))
+}
+
 fn label_glyph(theme: &Theme, color: Hsla, path: &'static str, size: f32) -> AnyElement {
     svg()
         .path(path)
@@ -3948,13 +3977,13 @@ fn label_body(
 
         // -- Audio (`TL/AudioTrack.tsx:532-549`) --------------------------
         (SegmentDetail::Audio { name, .. }, LabelTier::Full) => label_row()
-            .child(label_primary(theme, color).child(name.clone()))
+            .child(audio_name(theme, color, &segment.detail, name))
             .child(
                 label_secondary(theme, color).child(format_clip_time(segment.end - segment.start)),
             )
             .into_any_element(),
         (SegmentDetail::Audio { name, .. }, LabelTier::Compact) => label_row()
-            .child(label_primary(theme, color).child(name.clone()))
+            .child(audio_name(theme, color, &segment.detail, name))
             .into_any_element(),
         (SegmentDetail::Audio { .. }, LabelTier::Glyph) => return None,
 
@@ -4079,75 +4108,6 @@ pub fn render_playhead(theme: &Theme, x: f32, opacity: f32) -> AnyElement {
         opacity,
         Some((12., color, theme.editor.card.into())),
     )
-}
-
-pub fn render_punch_marks(
-    theme: &Theme,
-    view: TimelineView,
-    content_width: f32,
-    start: Option<f64>,
-    end: Option<f64>,
-) -> Vec<AnyElement> {
-    let color = Hsla::from(theme.editor.accent);
-    let secs_per_pixel = view.transform.secs_per_pixel(content_width);
-    let offset = |time: f64| ((time - view.transform.position) / secs_per_pixel) as f32;
-    let visible = |x: f32| (0.0..=content_width).contains(&x);
-    let mark = |x: f32, label: &'static str| {
-        div()
-            .absolute()
-            .left(px(TIMELINE_PADDING + TRACK_GUTTER + x))
-            .top(px(PLAYHEAD_TOP_OFFSET))
-            .bottom_0()
-            .w(px(1.))
-            .bg(color)
-            .child(
-                div()
-                    .absolute()
-                    .top(px(-7.))
-                    .left(px(2.))
-                    .px(px(4.))
-                    .rounded(px(3.))
-                    .bg(color)
-                    .text_size(px(10.))
-                    .line_height(px(14.))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(gpui::white())
-                    .child(label),
-            )
-            .into_any_element()
-    };
-
-    let mut elements = Vec::new();
-    if let (Some(start), Some(end)) = (start, end)
-        && end > start
-    {
-        let left = offset(start).max(0.0);
-        let right = offset(end).min(content_width);
-        if right > left {
-            elements.push(
-                div()
-                    .absolute()
-                    .left(px(TIMELINE_PADDING + TRACK_GUTTER + left))
-                    .top(px(PLAYHEAD_TOP_OFFSET))
-                    .bottom_0()
-                    .w(px(right - left))
-                    .bg(with_alpha(color, 0.1))
-                    .into_any_element(),
-            );
-        }
-    }
-    elements.extend(
-        start
-            .map(offset)
-            .filter(|x| visible(*x))
-            .map(|x| mark(x, tr::editor::window::punch_in::mark_in())),
-    );
-    elements.extend(
-        end.map(offset)
-            .filter(|x| visible(*x))
-            .map(|x| mark(x, tr::editor::window::punch_in::mark_out())),
-    );
-    elements
 }
 
 /// The hover preview line (`TL/index.tsx:1255-1277`).

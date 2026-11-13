@@ -83,10 +83,11 @@ const FORMATTED: &[&str] = &[
     "editor.window.open.meta_failed",
     "editor.window.open.not_found",
     "editor.window.presets.delete_confirm",
+    "editor.window.punch_in.elapsed",
+    "editor.window.punch_in.latency_ms",
+    "editor.window.punch_in.remaining",
     "editor.window.punch_in.save_failed",
     "editor.window.punch_in.start_failed",
-    "editor.window.punch_in.tooltip_from",
-    "editor.window.punch_in.tooltip_range",
     "editor.window.save_failed",
     "editor.window.text_menu.segments",
     "editor.window.title.not_saved_message",
@@ -1342,28 +1343,67 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "Finish the take before closing or deleting this recording.",
         ),
         (tr::editor::window::punch_in::button(), "Re-record"),
+        (tr::editor::window::punch_in::cancel(), "Cancel"),
+        (tr::editor::window::punch_in::clear(), "Clear"),
+        (tr::editor::window::punch_in::count_in(), "Get ready"),
+        (tr::editor::window::punch_in::discard(), "Discard"),
+        (
+            tr::editor::window::punch_in::export_blocked(),
+            "Finish the take before exporting",
+        ),
+        (
+            tr::editor::window::punch_in::hint(),
+            "Recording starts at In after a 3 second count-in. Drag the marks on the timeline to adjust.",
+        ),
+        (tr::editor::window::punch_in::latency(), "Latency offset"),
+        (
+            tr::editor::window::punch_in::latency_description(),
+            "Moves new takes earlier by this much so they line up with what you heard. If takes land late, raise it.",
+        ),
+        (tr::editor::window::punch_in::latency_off(), "Off"),
         (tr::editor::window::punch_in::mark_in(), "In"),
         (tr::editor::window::punch_in::mark_out(), "Out"),
+        (tr::editor::window::punch_in::microphone(), "Microphone"),
         (
             tr::editor::window::punch_in::no_microphone(),
-            "Choose a microphone in Cap's main window first",
+            "No microphone",
         ),
+        (tr::editor::window::punch_in::record(), "Record"),
+        (tr::editor::window::punch_in::recording(), "Recording"),
         (
             tr::editor::window::punch_in::recording_active(),
             "Finish the current recording before recording a take",
         ),
         (tr::editor::window::punch_in::saving(), "Saving…"),
+        (
+            tr::editor::window::punch_in::set_to_playhead(),
+            "Set to playhead",
+        ),
         (tr::editor::window::punch_in::starting(), "Starting…"),
         (tr::editor::window::punch_in::stop(), "Stop"),
         (
             tr::editor::window::punch_in::stopped_early(),
-            "Stopped before the punch-in point, so no take was kept",
+            "Stopped before the In point, so no take was kept",
         ),
         (tr::editor::window::punch_in::take_name(), "Voiceover take"),
+        (tr::editor::window::punch_in::title(), "Re-record voiceover"),
+        (
+            tr::editor::window::punch_in::tooltip_arm(),
+            "Re-record voiceover",
+        ),
+        (
+            tr::editor::window::punch_in::tooltip_armed(),
+            "Set In and Out at the playhead. Esc cancels.",
+        ),
+        (
+            tr::editor::window::punch_in::tooltip_record(),
+            "Start the take",
+        ),
         (
             tr::editor::window::punch_in::tooltip_stop(),
             "Stop take. Esc to discard.",
         ),
+        (tr::editor::window::punch_in::until_stop(), "Until you stop"),
         (
             tr::editor::window::transport::split_tooltip(),
             "Click a segment to split. Esc to finish.",
@@ -1865,13 +1905,11 @@ fn editor_shell_messages_format_like_the_code_they_replaced() {
         format!("Could not record a take: {error}")
     );
     assert_eq!(
-        tr::editor::window::punch_in::tooltip_from("0:05"),
-        "Re-record voiceover from 0:05"
+        tr::editor::window::punch_in::elapsed("0:05"),
+        "0:05 recorded"
     );
-    assert_eq!(
-        tr::editor::window::punch_in::tooltip_range("0:05", "0:09"),
-        "Re-record voiceover 0:05–0:09"
-    );
+    assert_eq!(tr::editor::window::punch_in::remaining("0:09"), "0:09 left");
+    assert_eq!(tr::editor::window::punch_in::latency_ms(40), "40 ms");
     assert_eq!(
         tr::editor::window::open::media_failed(&error),
         format!("Failed to read this recording's media: {error}")

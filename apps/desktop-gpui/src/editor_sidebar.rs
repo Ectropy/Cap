@@ -2658,6 +2658,7 @@ impl EditorWindow {
         let summary = self.summary();
         let selection = self.sidebar_selection().cloned();
         let selected_tab = self.sidebar.tab;
+        let punch_in = self.punch_in_engaged();
 
         // The two data-driven disabled states (`:602-604`, `:610`).
         let items = SidebarTab::ALL
@@ -2679,7 +2680,7 @@ impl EditorWindow {
                 ui::TabRailItem::new(
                     tab.icon(),
                     tab.title(),
-                    selection.is_none() && tab == selected_tab,
+                    selection.is_none() && !punch_in && tab == selected_tab,
                     disabled,
                 )
             })
@@ -2714,7 +2715,9 @@ impl EditorWindow {
                         .p(px(12.))
                         .child(tr::editor::sidebar::importing_image())
                 }))
-                .child(if let Some((index, group)) = self.sidebar.style_target {
+                .child(if punch_in {
+                    self.render_punch_in_panel(cx)
+                } else if let Some((index, group)) = self.sidebar.style_target {
                     self.render_style_group(index, group, cx)
                 } else if self.audio_picker.is_some() {
                     self.render_audio_library(cx)

@@ -13,7 +13,7 @@ pub(super) const MARKER_COLORS: [&str; 6] = [
 
 const MARKER_STACK_PX: f32 = 14.;
 const MARKER_DRAG_PX: f32 = 3.;
-const MARKER_SNAP_PX: f64 = 6.;
+pub(super) const MARKER_SNAP_PX: f64 = 6.;
 const MARKER_SPREAD_PX: f64 = 24.;
 const FLAG_ICON: f32 = 12.;
 /// Where the pole sits inside the flag glyph (x = 4.17 of 20).
@@ -831,7 +831,7 @@ impl EditorWindow {
                 .icon("icons/flag.svg")
                 .label(label)
                 .radius(px(7.))
-                .disabled(!self.project_ready())
+                .disabled(!self.project_ready() || self.punch_in.is_active())
                 .on_click(cx.listener(
                     |this, event: &gpui::ClickEvent, _window, cx| {
                         this.toggle_marker_list(event.position(), cx);
