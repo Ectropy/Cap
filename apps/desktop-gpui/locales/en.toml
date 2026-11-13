@@ -3368,6 +3368,7 @@ button = "Re-record"
 cancel = "Cancel"
 clear = "Clear"
 count_in = "Get ready"
+disarmed_by_edit = "Re-record was cancelled because the clips changed"
 discard = "Discard"
 elapsed = { text = "{time} recorded", context = "{time} is a duration such as 0:04." }
 export_blocked = "Finish the take before exporting"

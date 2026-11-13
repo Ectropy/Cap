@@ -1346,6 +1346,10 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (tr::editor::window::punch_in::cancel(), "Cancel"),
         (tr::editor::window::punch_in::clear(), "Clear"),
         (tr::editor::window::punch_in::count_in(), "Get ready"),
+        (
+            tr::editor::window::punch_in::disarmed_by_edit(),
+            "Re-record was cancelled because the clips changed",
+        ),
         (tr::editor::window::punch_in::discard(), "Discard"),
         (
             tr::editor::window::punch_in::export_blocked(),

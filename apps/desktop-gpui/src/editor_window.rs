@@ -6492,16 +6492,20 @@ impl EditorWindow {
     pub(crate) fn show_notice(
         &mut self,
         message: impl Into<SharedString>,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.post_notice(message, cx);
+    }
+
+    pub(crate) fn post_notice(&mut self, message: impl Into<SharedString>, cx: &mut Context<Self>) {
         self.notice_seq += 1;
         let id = self.notice_seq;
         self.notice = Some(EditorNotice {
             id,
             message: message.into(),
         });
-        cx.spawn_in(window, async move |this, cx| {
+        cx.spawn(async move |this, cx| {
             cx.background_executor().timer(EDITOR_NOTICE_DURATION).await;
             this.update(cx, |this, cx| {
                 if this.notice.as_ref().is_some_and(|notice| notice.id == id) {

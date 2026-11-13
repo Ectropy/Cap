@@ -249,23 +249,24 @@ fn clip_layout(timeline: Option<&TimelineConfiguration>) -> ClipLayout {
     })
 }
 
+fn clamped_marks(marks: PunchMarks, total: f64) -> PunchMarks {
+    let start = marks.start.clamp(0.0, total.max(0.0));
+    PunchMarks {
+        start,
+        end: marks
+            .end
+            .map(|end| end.min(total))
+            .filter(|end| end - start >= edits::MIN_AUDIO_SEGMENT_DURATION),
+    }
+}
+
 fn marks_after_edit(
     marks: PunchMarks,
     armed_on: &ClipLayout,
     now: &ClipLayout,
     total: f64,
 ) -> Option<PunchMarks> {
-    if armed_on != now {
-        return None;
-    }
-    let start = marks.start.clamp(0.0, total.max(0.0));
-    Some(PunchMarks {
-        start,
-        end: marks
-            .end
-            .map(|end| end.min(total))
-            .filter(|end| end - start >= edits::MIN_AUDIO_SEGMENT_DURATION),
-    })
+    (armed_on == now).then(|| clamped_marks(marks, total))
 }
 
 fn preroll_start(start: f64) -> f64 {
@@ -682,7 +683,10 @@ impl EditorWindow {
                     self.punch_in_changed(cx);
                 }
             }
-            None => self.disarm_punch_in(cx),
+            None => {
+                self.disarm_punch_in(cx);
+                self.post_notice(tr::editor::window::punch_in::disarmed_by_edit(), cx);
+            }
         }
     }
 
@@ -806,13 +810,12 @@ impl EditorWindow {
         .detach();
     }
 
-    fn punch_in_microphone_options(&self) -> Vec<Option<String>> {
-        let mut options = vec![None];
-        options.extend(self.punch_in.microphones.iter().cloned().map(Some));
+    fn punch_in_microphone_options(&self) -> Vec<String> {
+        let mut options = self.punch_in.microphones.clone();
         if let Some(current) = &self.punch_in.microphone
-            && !self.punch_in.microphones.contains(current)
+            && !options.contains(current)
         {
-            options.push(Some(current.clone()));
+            options.push(current.clone());
         }
         options
     }
@@ -830,11 +833,8 @@ impl EditorWindow {
                 .punch_in_microphone_options()
                 .into_iter()
                 .map(|option| {
-                    let selected = option == self.punch_in.microphone;
-                    let label = option.unwrap_or_else(|| {
-                        tr::editor::window::punch_in::no_microphone().to_string()
-                    });
-                    ui::MenuItem::new(label, selected)
+                    let selected = self.punch_in.microphone.as_ref() == Some(&option);
+                    ui::MenuItem::new(option, selected)
                 })
                 .collect(),
         }
@@ -866,8 +866,8 @@ impl EditorWindow {
                 let Some(label) = self.punch_in_microphone_options().into_iter().nth(index) else {
                     return;
                 };
-                self.punch_in.microphone = label.clone();
-                Feeds::global(cx).update(cx, |feeds, cx| feeds.set_microphone(label, cx));
+                self.punch_in.microphone = Some(label.clone());
+                Feeds::global(cx).update(cx, |feeds, cx| feeds.set_microphone(Some(label), cx));
                 self.configure_punch_in_meter(cx);
             }
         }
@@ -902,10 +902,7 @@ impl EditorWindow {
             self.stop_playback(cx);
         }
         let total = self.total_duration();
-        let current = clip_layout(self.project.timeline.as_ref());
-        if let Some(marks) = marks_after_edit(self.punch_in.marks, &current, &current, total) {
-            self.punch_in.marks = marks;
-        }
+        self.punch_in.marks = clamped_marks(self.punch_in.marks, total);
         let marks = self.punch_in.marks;
         self.seek_to_time(preroll_start(marks.start), cx);
         self.punch_in.drag = None;
@@ -1330,7 +1327,6 @@ impl EditorWindow {
                     )
             });
         div()
-            .id(("punch-mark", index))
             .absolute()
             .left(px(x - MARK_HIT_PX))
             .top(px(PLAYHEAD_TOP_OFFSET))
@@ -1346,15 +1342,6 @@ impl EditorWindow {
                     .bg(color),
             )
             .child(chip)
-            .when(draggable, |hit| {
-                hit.cursor(gpui::CursorStyle::ResizeLeftRight)
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
-                            this.punch_mark_down(mark, event, cx);
-                        }),
-                    )
-            })
             .into_any_element()
     }
 
